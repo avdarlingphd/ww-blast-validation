@@ -1,0 +1,25 @@
+# Snakemake
+.snakemake/
+# Pipeline outputs (regenerated on the cluster; large)
+results/
+# Extracted / subsampled sequences
+*.fasta
+*.fa
+*.fastq
+*.fq
+*.fastq.gz
+# BLAST result tables (regenerated)
+*_blast_results.tsv
+# SLURM logs
+slurm/
+slurm_logs/
+logs/
+*.out
+*.err
+slurm-*.out
+# Python
+__pycache__/
+*.pyc
+.venv/
+# OS / editor
+.DS_Store

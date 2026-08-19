@@ -1,0 +1,31 @@
+# ww-blast-validation config.
+# detection_source routes inputs+outputs so Kraken and Bowtie candidate sets never collide.
+detection_source: kraken          # kraken | bowtie
+
+# ---- candidate list (in-repo; small, version-controlled). Paths are relative to the repo root. ----
+taxid_list:  resources/sample_taxid_list_all_pathogens.tsv   # cols: sample<TAB>taxid  (no header)
+taxid_names: resources/taxid_to_name_all_pathogens.csv       # cols: taxid,organism_name
+
+# ---- extraction inputs (kraken variant) — persistent holylabs storage (netscratch copies were purged) ----
+# The per-read Kraken2 output (.kraken) + report (.kreport) are keyed by {sample}; the QC'd/dehosted
+# paired FASTQs are {sample}_R1/R2.fastq.gz. The extract rule regenerates the per-(sample,taxid) FASTAs
+# from these, since the old netscratch FASTA tree was purged by scratch retention.
+kraken_dir:  /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/kraken_out/kraken_output_ct0_5_min_hit_3
+fastq_dir:   /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs
+
+# ---- outputs (fresh v2 tree; report lands at results_dir/<detection_source>/blast_false_positive_report.tsv) ----
+# Under results_dir/<source>/:  fasta/ (extracted), blast/ (blastn results), flags/, and the report.
+results_dir: /n/netscratch/hhealy_lab/avdarling/blast_validation_v2
+
+# ---- binaries + database (holylabs conda envs; netscratch envs were purged) ----
+python:       /n/home11/avdarling/miniconda3/bin/python3
+krakentools:  /n/home11/avdarling/KrakenTools/extract_kraken_reads.py
+blastn:       /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/blast_env/bin/blastn
+seqtk:        /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/seqtk_env/bin/seqtk
+db:           /n/netscratch/informatics/Everyone/external_repos/blast/nt/latest/nt
+
+# ---- params (v2 refinements) ----
+max_target_seqs: 100     # was 20; more hits so the true organism is not crowded out
+max_reads: 500           # seqtk subsample cap per read set
+threshold: 80            # min avg pct_match (top-hit-by-bitscore) to call TRUE_POSITIVE
+min_match_reads: 1       # rescue: >=1 matching read is enough when pct_match is high (was >2)
