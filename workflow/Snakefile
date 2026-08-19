@@ -6,10 +6,12 @@
 # rule and routes the whole output tree into results/<source>/, so kraken and bowtie candidate sets
 # never collide. Everything downstream of extraction (blast, classify) is shared.
 #
-# Pipeline:  extract  ->  blast_pair  ->  classify
-#   extract     per (sample,taxid): pull the taxid's reads from the Kraken2 output + FASTQs -> FASTAs
-#   blast_pair  per (sample,taxid): subsample to max_reads, blastn vs nt
-#   classify    aggregate all pairs -> blast_false_positive_report.tsv
+# Pipeline:  extract_sample  ->  blast_pair  ->  classify
+#   extract_sample  ONE job per SAMPLE: read the ~5 GB .kraken + FASTQs ONCE and write the per-taxid
+#                   R1/R2 FASTAs for ALL of that sample's taxids in a single pass. A per-sample
+#                   sentinel (flags/{sample}.extracted) tells the DAG the group is done.
+#   blast_pair      per (sample,taxid): subsample to max_reads, blastn vs nt
+#   classify        aggregate all pairs -> blast_false_positive_report.tsv
 #
 # Run (from repo root, on the cluster):
 #   snakemake -p --profile profiles/slurm
@@ -24,6 +26,7 @@ SRC        = config["detection_source"]                       # "kraken" or "bow
 RESULTS    = config["results_dir"].rstrip("/") + "/" + SRC
 FASTA_TREE = RESULTS + "/fasta"                               # extracted per-pair FASTAs land here
 BLAST_TREE = RESULTS + "/blast"
+FLAG_DIR   = RESULTS + "/flags"                               # per-sample "extraction done" sentinels
 
 wildcard_constraints:
     taxid  = r"\d+",
@@ -50,54 +53,59 @@ rule all:
         RESULTS + "/blast_false_positive_report.tsv"
 
 # ================================================================================================
-# EXTRACT — method-specific, switched by detection_source. Regenerates the per-(sample,taxid) FASTAs
-# that scratch retention purged. Each variant must produce the SAME output paths (fasta(s,t,read)),
-# so blast_pair/classify stay source-agnostic.
+# EXTRACT — method-specific, switched by detection_source, and batched PER SAMPLE. Each variant reads
+# the sample's classifier output ONCE and writes every fasta(sample, taxid, read) for that sample,
+# then touches the sentinel flags/{sample}.extracted. Downstream rules stay source-agnostic.
 # ================================================================================================
 if SRC == "kraken":
-    # Pull the reads Kraken2 assigned to {taxid} (incl. children) from {sample}'s .kraken + FASTQs.
-    rule extract:
+    # Read {sample}.kraken + FASTQs once; write per-taxid FASTAs for all of the sample's taxids.
+    rule extract_sample:
         input:
             kraken  = config["kraken_dir"] + "/{sample}.kraken",
             kreport = config["kraken_dir"] + "/{sample}.kreport",
             r1_fq   = config["fastq_dir"]  + "/{sample}_R1.fastq.gz",
             r2_fq   = config["fastq_dir"]  + "/{sample}_R2.fastq.gz",
         output:
-            r1 = FASTA_TREE + "/blast_validation_{sample}_{taxid}/{sample}_taxid_{taxid}_R1.fasta",
-            r2 = FASTA_TREE + "/blast_validation_{sample}_{taxid}/{sample}_taxid_{taxid}_R2.fasta",
+            flag = touch(FLAG_DIR + "/{sample}.extracted"),
         params:
-            python      = config["python"],
-            krakentools = config["krakentools"],
-            seqtk       = config["seqtk"],
+            python     = config["python"],
+            taxid_list = config["taxid_list"],
+            out_dir    = FASTA_TREE,
         resources:
             mem_mb  = 16000,
-            runtime = 240,   # minutes
+            runtime = 360,   # minutes (one pass over the ~5 GB .kraken + both FASTQs)
         shell:
-            "PYTHON={params.python} KRAKENTOOLS={params.krakentools} SEQTK={params.seqtk} "
-            "bash workflow/scripts/extract_kraken.sh {wildcards.sample} {wildcards.taxid} "
-            "{input.kraken} {input.kreport} {input.r1_fq} {input.r2_fq} {output.r1} {output.r2}"
+            "{params.python} workflow/scripts/extract_kraken_sample.py "
+            "--sample {wildcards.sample} --kraken {input.kraken} --kreport {input.kreport} "
+            "--r1 {input.r1_fq} --r2 {input.r2_fq} "
+            "--taxid_list {params.taxid_list} --out_dir {params.out_dir}"
 
 elif SRC == "bowtie":
-    # Placeholder: a bowtie extract rule (same output paths) goes here. Kept as an explicit branch so
-    # kraken-vs-bowtie stays a config switch, not a fork. Not yet implemented.
+    # Placeholder: a per-sample bowtie extract rule (same fasta() outputs + sentinel) goes here. Kept
+    # as an explicit branch so kraken-vs-bowtie stays a config switch, not a fork. Not implemented.
     raise WorkflowError(
         "detection_source: bowtie — extract rule not implemented yet. "
-        "Add a bowtie extract rule producing fasta(sample, taxid, read), then remove this guard."
+        "Add a bowtie extract_sample rule producing fasta(sample, taxid, read) + the {sample} sentinel, "
+        "then remove this guard."
     )
 else:
     raise WorkflowError(f"detection_source must be 'kraken' or 'bowtie', got: {SRC!r}")
 
 # ================================================================================================
-# BLAST — one job per (sample, taxid). The "_taxid_" literal disambiguates samples with underscores.
+# BLAST — one job per (sample, taxid). Depends on the per-sample extraction sentinel; the specific
+# per-pair FASTAs (created by extract_sample, empty if zero reads) are read inside blast_pair.sh,
+# which already handles empty/missing input by emitting an empty result (-> NO_DATA).
+# The "_taxid_" literal in the paths disambiguates samples from taxids.
 # ================================================================================================
 rule blast_pair:
     input:
-        r1 = fasta("{sample}", "{taxid}", "R1"),
-        r2 = fasta("{sample}", "{taxid}", "R2"),
+        flag = FLAG_DIR + "/{sample}.extracted",
     output:
         r1 = BLAST_TREE + "/blast_validation_{sample}_{taxid}/{sample}_taxid_{taxid}_R1_blast_results.tsv",
         r2 = BLAST_TREE + "/blast_validation_{sample}_{taxid}/{sample}_taxid_{taxid}_R2_blast_results.tsv",
     params:
+        in_r1      = lambda wc: fasta(wc.sample, wc.taxid, "R1"),
+        in_r2      = lambda wc: fasta(wc.sample, wc.taxid, "R2"),
         blastn     = config["blastn"],
         seqtk      = config["seqtk"],
         db         = config["db"],
@@ -110,7 +118,7 @@ rule blast_pair:
     shell:
         "BLASTN={params.blastn} SEQTK={params.seqtk} DB={params.db} "
         "MAX_READS={params.max_reads} MAX_TARGET={params.max_target} THREADS={threads} "
-        "bash workflow/scripts/blast_pair.sh {input.r1} {input.r2} {output.r1} {output.r2}"
+        "bash workflow/scripts/blast_pair.sh {params.in_r1} {params.in_r2} {output.r1} {output.r2}"
 
 # ================================================================================================
 # CLASSIFY — aggregate every pair's blast results into one report.

@@ -20,19 +20,29 @@ tables.
 ## Pipeline
 
 ```
-extract  ->  blast_pair  ->  classify
+extract_sample  ->  blast_pair  ->  classify
 ```
 
-1. **`extract`** (method-specific) — regenerate the per-(sample, taxid) `R1`/`R2` FASTAs of reads the
-   classifier assigned to that taxid.
-   - *kraken variant:* `KrakenTools/extract_kraken_reads.py -k {sample}.kraken -r {sample}.kreport
-     -s R1 -s2 R2 -t {taxid} --include-children --fastq-output`, then `seqtk seq -a` to FASTA.
-     `--include-children` walks the `.kreport` taxonomy tree so strain/subspecies reads under the
-     taxid are captured.
+1. **`extract_sample`** (method-specific, **batched per sample**) — regenerate the per-(sample, taxid)
+   `R1`/`R2` FASTAs of reads the classifier assigned to each taxid. **One job per sample** reads the
+   sample's ~5 GB classifier output **once** and both FASTQs **once**, and writes the FASTAs for *all*
+   of that sample's taxids in a single pass. A per-sample sentinel (`flags/{sample}.extracted`) tells
+   the DAG the group is done.
+   - *kraken variant* (`workflow/scripts/extract_kraken_sample.py`): parses `{sample}.kreport` into a
+     taxonomy tree and, for each target taxid, collects its whole subtree (**include-children**, so
+     strain/subspecies reads under the taxid are captured — faithful to KrakenTools
+     `extract_kraken_reads.py --include-children`). It then streams `{sample}.kraken` once to map
+     reads → taxids, and streams each FASTQ once to write per-taxid FASTAs. A read whose taxid falls
+     under several targets (nested genus + species) is written to each, exactly as running the tool
+     once per taxid would.
    - Zero-read taxids still get **empty** FASTAs, so the DAG never breaks; they flow through to
      `NO_DATA`.
+   - *Why batched:* the previous per-(sample, taxid) rule reloaded the ~5 GB `.kraken` once per taxid
+     (~8,600 loads). Batching to one pass per sample (~250 loads) cuts the `.kraken` and FASTQ read
+     I/O by ~34× (the mean taxids/sample) — roughly 43 TB → 1.3 TB of `.kraken` reads over a full run.
 2. **`blast_pair`** — per pair: subsample each read set to `max_reads` (`seqtk sample -s 42`), then
-   `blastn` vs `nt` with `-max_target_seqs 100` and bitscore in the outfmt.
+   `blastn` vs `nt` with `-max_target_seqs 100` and bitscore in the outfmt. Depends on the sample's
+   extraction sentinel; reads the per-pair FASTA (empty/missing → empty result → `NO_DATA`).
 3. **`classify`** — aggregate every pair's BLAST results into
    `results/<detection_source>/blast_false_positive_report.tsv`.
 
@@ -45,8 +55,8 @@ extract  ->  blast_pair  ->  classify
   never collide (`results/kraken/…`, `results/bowtie/…`).
 
 Everything downstream of extraction — `blast_pair`, `classify`, the classifier logic — is
-source-agnostic. Adding Bowtie later means writing one `extract` variant that emits the same output
-paths; no other rule changes. (The `bowtie` branch is currently a stub.)
+source-agnostic. Adding Bowtie later means writing one `extract_sample` variant that emits the same
+output paths + per-sample sentinel; no other rule changes. (The `bowtie` branch is currently a stub.)
 
 ## v2 refinements (vs the original per-job shell scripts)
 
@@ -77,9 +87,9 @@ All paths and parameters are in `config/config.yaml`.
 
 ```
 config/config.yaml            paths, params, detection_source switch
-workflow/Snakefile            rules: extract (kraken) -> blast_pair -> classify
+workflow/Snakefile            rules: extract_sample (kraken) -> blast_pair -> classify
 workflow/scripts/
-  extract_kraken.sh           kraken-variant read extraction (KrakenTools + seqtk)
+  extract_kraken_sample.py    kraken-variant per-sample batched read extraction (single pass)
   blast_pair.sh               subsample + blastn for one pair
   false_positive_detection.py v2 classifier
 profiles/slurm/config.yaml    Snakemake SLURM executor profile (FASRC / cannon)
@@ -103,6 +113,7 @@ snakemake -p --profile profiles/slurm
 The SLURM profile targets FASRC partitions and needs the Snakemake SLURM executor plugin
 (`snakemake-executor-plugin-slurm`) installed alongside Snakemake for a real run.
 
-> **Cost warning.** A full run is ~8,600 extraction jobs + ~8,600 `blastn` jobs against `nt`. The
-> kraken variant loads the ~5 GB `.kraken` file once per taxid job; batching per sample would cut that
-> I/O. Do not launch the full compute without intent.
+> **Cost warning.** A full run is **250 `extract_sample` jobs + ~8,600 `blast_pair` jobs** against
+> `nt` + 1 `classify` (~8,875 jobs total). Extraction now reads each ~5 GB `.kraken` once per sample
+> (~250 loads) instead of once per taxid (~8,600 loads). The `blastn` jobs are the expensive part;
+> do not launch the full compute without intent.
