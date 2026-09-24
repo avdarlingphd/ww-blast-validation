@@ -1,0 +1,29 @@
+# Snakemake SLURM profile for FASRC / Cannon (HSPH allocation).
+# Requires snakemake + snakemake-executor-plugin-slurm in the active env.
+# Partition is hsph (lab policy); verify slurm_account matches the hsph allocation before a real run.
+executor: slurm
+jobs: 200                      # max concurrently-submitted jobs (throttles the ~8,600 blast jobs)
+default-resources:
+  slurm_account: hhealy_lab
+  slurm_partition: hsph
+  mem_mb: 8000
+  runtime: 120                 # minutes
+set-resources:
+  extract_sample:              # reads the ~5 GB .kraken + both FASTQs once per sample
+    mem_mb: 16000
+    runtime: 180
+    cpus_per_task: 2
+  blast_pair:                  # blastn vs nt on subsampled reads
+    mem_mb: 24000
+    runtime: 240
+    cpus_per_task: 8
+  classify:
+    mem_mb: 4000
+    runtime: 30
+    cpus_per_task: 1
+set-threads:
+  blast_pair: 8
+restart-times: 1
+latency-wait: 60
+rerun-incomplete: true
+printshellcmds: true
