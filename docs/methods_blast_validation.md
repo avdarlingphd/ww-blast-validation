@@ -22,4 +22,6 @@ detection; genus-level candidates were matched at the genus level.
 
 Parameters: max_target_seqs = 100 (so the true organism is not crowded out of the returned hits);
 max_reads = 500 (subsample cap per read set); threshold = 80% (TRUE_POSITIVE); min_match_reads = 3
-(more than two matching reads required per set).
+(more than two matching reads required per set). The nt database build used for each run was recorded
+automatically (blastdbcmd -info) alongside the git commit of the code, so results trace to an exact
+code + reference-database version.

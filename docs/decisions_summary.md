@@ -19,6 +19,6 @@
 - The cluster runs a git CLONE of the repo; run `git pull` before each run; never edit the cluster copy without committing and pushing.
 - Flow: edit + commit + push from laptop -> GitHub (source of truth) -> git pull on cluster -> run.
 - conda environment.yaml rebuilds the exact tool versions anywhere (also fixes "snakemake missing on cluster").
-- Pin the nt database to a dated snapshot (not "latest") so re-runs are reproducible.
-- Stamp each run's output with the git commit hash + the config used.
+- Keep the nt database configurable (point `db:` at your own nt); prefer a dated build over "latest".
+- Every run auto-stamps results with PROVENANCE.txt (git commit + git describe + the nt database build from `blastdbcmd -info`) and a config.snapshot.yaml, so results trace to exact code + reference DB.
 - Tag pipeline versions (e.g., git tag v2) so a result maps to an exact code state.

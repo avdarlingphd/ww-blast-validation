@@ -122,7 +122,7 @@ Code lives in git; large data and outputs live on **holylabs** (persistent) and 
 | Classifier inputs (`.kraken` / `.kreport`) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/kraken_out/kraken_output_ct0_5_min_hit_3/` |
 | QC'd paired FASTQs | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs/` |
 | **Outputs** (FASTAs, BLAST tables, report) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/blast_validation_v2/` |
-| BLAST `nt` database | pin to a **dated** nt snapshot (see config `db:` TODO), not `.../nt/latest/nt` |
+| BLAST `nt` database | **configurable** (`db:`) — point at your local nt; prefer a dated build over `latest`. The build actually used is recorded per run in `PROVENANCE.txt`. |
 | Conda environment | `workflow/envs/environment.yaml` |
 | Candidate list + names | `resources/` (in git) |
 
@@ -140,9 +140,15 @@ a *clone* of it, never a hand-copied folder — that is what prevents running a 
 - Edit → commit → push from wherever you work; never edit the cluster copy without committing + pushing
   it back, or the two drift apart.
 - Rebuild the environment anywhere: `conda env create -f workflow/envs/environment.yaml`.
-- Pin the `nt` database to a dated snapshot (config `db:`), not `latest`.
-- Stamp each run's output with the commit it ran: `git rev-parse HEAD > <results_dir>/COMMIT.txt`
-  and keep a copy of `config/config.yaml` alongside the report, so any result traces to exact code + settings.
+- Keep the `nt` database **configurable** (`db:`) — point it at your own local nt rather than relying on
+  the FASRC path, and prefer a dated build over `latest`.
+- **Automatic provenance.** Each run writes two files next to the report in `results_dir/<source>/`:
+  - `PROVENANCE.txt` — the git commit (+ `git describe` and any uncommitted-file list) and the nt database
+    build from `blastdbcmd -info`;
+  - `config.snapshot.yaml` — a copy of the config as run.
+
+  So every report traces to the exact code, settings, and reference database that produced it — without
+  hard-coding any machine-specific path.
 - Tag pipeline versions (`git tag v2 && git push --tags`) so a result maps to a fixed code state.
 
 ### Deprecated copies

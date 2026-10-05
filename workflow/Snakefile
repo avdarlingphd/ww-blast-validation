@@ -127,7 +127,8 @@ rule classify:
     input:
         blast_outputs()
     output:
-        RESULTS + "/blast_false_positive_report.tsv"
+        report = RESULTS + "/blast_false_positive_report.tsv",
+        prov   = RESULTS + "/PROVENANCE.txt",
     params:
         python          = config["python"],
         blast_dir       = BLAST_TREE,
@@ -135,8 +136,34 @@ rule classify:
         taxid_names     = config["taxid_names"],
         threshold       = config["threshold"],
         min_match_reads = config["min_match_reads"],
+        blastn          = config["blastn"],
+        db              = config["db"],
+        src             = SRC,
     shell:
-        "{params.python} workflow/scripts/false_positive_detection.py "
-        "--blast_dir {params.blast_dir} --taxid_list {params.taxid_list} "
-        "--taxid_names {params.taxid_names} --output {output} "
-        "--threshold {params.threshold} --min_match_reads {params.min_match_reads}"
+        # 1) build the report, then 2) stamp provenance so every report traces to the exact code,
+        #    settings, and reference DB that produced it (reproducible for re-runs and other projects).
+        r"""
+        {params.python} workflow/scripts/false_positive_detection.py \
+            --blast_dir {params.blast_dir} --taxid_list {params.taxid_list} \
+            --taxid_names {params.taxid_names} --output {output.report} \
+            --threshold {params.threshold} --min_match_reads {params.min_match_reads}
+        (
+          echo "# ww-blast-validation run provenance"
+          echo "date_utc:         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "detection_source: {params.src}"
+          echo "host:             $(hostname)"
+          echo "report:           {output.report}"
+          echo
+          echo "## git (code version)"
+          echo "commit:   $(git rev-parse HEAD 2>/dev/null || echo NOT_A_GIT_CHECKOUT)"
+          echo "describe: $(git describe --always --dirty --tags 2>/dev/null || echo n/a)"
+          echo "uncommitted changes (empty line below = clean working tree):"
+          git status --porcelain 2>/dev/null
+          echo
+          echo "## blast database (reference version)"
+          echo "db_path: {params.db}"
+          "$(dirname {params.blastn})/blastdbcmd" -db {params.db} -info 2>&1 || echo "blastdbcmd -info failed"
+        ) > {output.prov}
+        cp config/config.yaml "$(dirname {output.report})/config.snapshot.yaml"
+        echo "provenance -> {output.prov}"
+        """
