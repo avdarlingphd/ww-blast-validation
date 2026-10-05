@@ -13,6 +13,13 @@ v2 refinements (vs v1):
     (few reads that all hit the right organism is confident evidence), instead of UNCERTAIN.
   * Pairs with -max_target_seqs 100 (set in the blast rule) so the true organism is not crowded out.
 
+v2.1 classification logic (current):
+  * SPECIES-LEVEL MATCHING: a species-level candidate (genus + epithet) requires BOTH genus and species
+    epithet to agree. A genus-only hit or a sibling-species hit no longer confirms a species detection;
+    genus-level candidates still match at the genus. (See organism_matches.)
+  * READ FLOOR: a detection resting on a single read (n_reads == 1, trivially 100% match) is called
+    UNCERTAIN, not TRUE_POSITIVE. TRUE_POSITIVE requires >= 2 reads total across the valid read sets.
+
 Usage (called by the Snakemake classify rule):
     python false_positive_detection.py --blast_dir DIR --taxid_list TSV --taxid_names CSV
         --output report.tsv [--threshold 80] [--min_match_reads 1]
@@ -36,17 +43,23 @@ def organism_from_stitle(stitle: str) -> str:
     w = org.split()
     return " ".join(w[:3]) if len(w) > 3 else org
 
+def _tokens(name: str):
+    # lowercase, strip surrounding punctuation/brackets per token, drop empties
+    return [t for t in (re.sub(r"[^a-z0-9]", "", w) for w in name.lower().split()) if t]
+
 def organism_matches(hit: str, expected: str) -> bool:
+    # v2.1: species-level matching. A SPECIES-level candidate (genus + epithet) requires BOTH the genus
+    # and the species epithet to agree -- a genus-only hit or a sibling-species hit does NOT confirm it.
+    # A GENUS-level candidate (single token) matches at the genus.
     if not hit or hit.lower() in ("unknown", "n/a", ""):
         return False
-    h, e = hit.lower(), expected.lower()
-    if e in h or h in e:
-        return True
-    ew = e.split()
-    if len(ew) == 1:                       # genus-only expected -> genus match allowed
-        hg = h.split()[0] if h.split() else ""
-        return bool(hg and hg == ew[0])
-    return False                            # species expected -> require species-level match
+    h, e = _tokens(hit), _tokens(expected)
+    if not h or not e:
+        return False
+    if len(e) == 1:                         # genus-level candidate -> genus match allowed
+        return h[0] == e[0]
+    # species-level candidate -> require genus AND species epithet agreement
+    return len(h) >= 2 and h[0] == e[0] and h[1] == e[1]
 
 def is_uncultured(org: str) -> bool:
     if not org:
@@ -99,14 +112,19 @@ def classify(r1, r2, threshold=80.0, min_match_reads=1):
     avg_unc = round(sum(s.get("pct_uncultured", 0) for s in valid) / len(valid), 1)
     ranks = [s.get("expected_rank") for s in valid]
     n_matches = [s.get("n_match", 0) for s in valid]
+    total_reads = sum(s.get("n_reads", 0) for s in valid)
     if avg_unc > 50.0:                                        # uncultured/environmental dominates
         return "UNCULTURED_DOMINANT", avg_pct, avg_unc, ranks
     if avg_pct >= threshold:
         rank_ok = all(r is not None and r <= 2 for r in ranks)
-        # v2 RESCUE: drop the strict n_match>2 gate. A high-%match pair with few reads (all matching)
-        # is confident TRUE. Require only >= min_match_reads (default 1) matching read in each set.
+        # RESCUE: a high-%match pair with few reads (all matching) is confident TRUE. Require only
+        # >= min_match_reads (default 1) matching read in each set.
         reads_ok = all(n >= min_match_reads for n in n_matches)
-        return ("TRUE_POSITIVE" if (rank_ok and reads_ok) else "UNCERTAIN", avg_pct, avg_unc, ranks)
+        # v2.1 READ FLOOR: a detection resting on a single read (n_reads == 1 -> trivially 100% match)
+        # is NOT called positive; it is UNCERTAIN. Require >= 2 reads total across the valid sets.
+        depth_ok = total_reads >= 2
+        return ("TRUE_POSITIVE" if (rank_ok and reads_ok and depth_ok) else "UNCERTAIN",
+                avg_pct, avg_unc, ranks)
     if avg_pct < 10.0:
         return "FALSE_POSITIVE", avg_pct, avg_unc, ranks
     return "UNCERTAIN", avg_pct, avg_unc, ranks

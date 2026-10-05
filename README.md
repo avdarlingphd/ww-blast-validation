@@ -113,6 +113,44 @@ snakemake -p --profile profiles/slurm
 The SLURM profile targets FASRC partitions and needs the Snakemake SLURM executor plugin
 (`snakemake-executor-plugin-slurm`) installed alongside Snakemake for a real run.
 
+## Data & compute locations
+
+Code lives in git; large data and outputs live on **holylabs** (persistent) and are gitignored.
+
+| What | Where |
+|------|-------|
+| Classifier inputs (`.kraken` / `.kreport`) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/kraken_out/kraken_output_ct0_5_min_hit_3/` |
+| QC'd paired FASTQs | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs/` |
+| **Outputs** (FASTAs, BLAST tables, report) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/blast_validation_v2/` |
+| BLAST `nt` database | pin to a **dated** nt snapshot (see config `db:` TODO), not `.../nt/latest/nt` |
+| Conda environment | `workflow/envs/environment.yaml` |
+| Candidate list + names | `resources/` (in git) |
+
+Outputs go to **holylabs, not netscratch** — netscratch is purge-prone and the earlier working tree was
+already lost to scratch retention. Nothing under these data paths is committed to git.
+
+## Version control & reproducibility
+
+**The GitHub repo (`avdarlingphd/ww-blast-validation`) is the single source of truth.** The cluster runs
+a *clone* of it, never a hand-copied folder — that is what prevents running a stale script.
+
+- First time on the cluster: `git clone https://github.com/avdarlingphd/ww-blast-validation.git`
+- Before every run on the cluster: `git pull` (so the clone matches GitHub), then `git status` to
+  confirm `working tree clean` / `up to date with origin/main`.
+- Edit → commit → push from wherever you work; never edit the cluster copy without committing + pushing
+  it back, or the two drift apart.
+- Rebuild the environment anywhere: `conda env create -f workflow/envs/environment.yaml`.
+- Pin the `nt` database to a dated snapshot (config `db:`), not `latest`.
+- Stamp each run's output with the commit it ran: `git rev-parse HEAD > <results_dir>/COMMIT.txt`
+  and keep a copy of `config/config.yaml` alongside the report, so any result traces to exact code + settings.
+- Tag pipeline versions (`git tag v2 && git push --tags`) so a result maps to a fixed code state.
+
+### Deprecated copies
+
+Older loose copies of `false_positive_detection.py` — under `.../Linux Scripts/` and
+`.../Biofilm-Project/4_blastn_validation/` — are **deprecated v1** and must not be run. They have drifted
+from this repo; **this repository is canonical**.
+
 > **Cost warning.** A full run is **250 `extract_sample` jobs + ~8,600 `blast_pair` jobs** against
 > `nt` + 1 `classify` (~8,875 jobs total). Extraction now reads each ~5 GB `.kraken` once per sample
 > (~250 loads) instead of once per taxid (~8,600 loads). The `blastn` jobs are the expensive part;

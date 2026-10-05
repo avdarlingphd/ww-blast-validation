@@ -1,0 +1,16 @@
+# Rebuildable conda environment for ww-blast-validation.
+#   conda env create -f workflow/envs/environment.yaml
+#   conda activate ww-blast-validation
+# This is the install recipe for the cluster too (fixes "snakemake not installed on Cannon").
+# Versions are pinned so a run months from now uses the same tools that produced the published results.
+name: ww-blast-validation
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python =3.11
+  - snakemake-minimal =8.20
+  - snakemake-executor-plugin-slurm =0.11   # needed for a real run via profiles/slurm
+  - blast =2.15                              # blastn
+  - seqtk =1.4                               # read subsampling
+  - pandas =2.2

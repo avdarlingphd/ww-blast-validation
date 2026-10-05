@@ -15,13 +15,15 @@ fastq_dir:   /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs
 
 # ---- outputs (fresh v2 tree; report lands at results_dir/<detection_source>/blast_false_positive_report.tsv) ----
 # Under results_dir/<source>/:  fasta/ (extracted), blast/ (blastn results), flags/, and the report.
-results_dir: /n/netscratch/hhealy_lab/avdarling/blast_validation_v2
+results_dir: /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/blast_validation_v2
 
 # ---- binaries + database (holylabs conda envs; netscratch envs were purged) ----
 python:       /n/home11/avdarling/miniconda3/bin/python3
 krakentools:  /n/home11/avdarling/KrakenTools/extract_kraken_reads.py
 blastn:       /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/blast_env/bin/blastn
 seqtk:        /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/seqtk_env/bin/seqtk
+# TODO (reproducibility): pin to a dated nt snapshot, e.g. .../blast/nt/nt_YYYY_MM/nt, instead of
+# 'latest' (latest is a moving target; a dated snapshot freezes the reference so re-runs are reproducible).
 db:           /n/netscratch/informatics/Everyone/external_repos/blast/nt/latest/nt
 
 # ---- params (v2 refinements) ----
