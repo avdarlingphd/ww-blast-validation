@@ -9,14 +9,14 @@ the only difference upstream is how the per-(sample, taxid) FASTAs were produced
 v2 refinements (vs v1):
   * TOP-HIT-BY-BITSCORE: each read is judged by its single best hit (max bitscore), not "any hit among
     the returned set". Requires bitscore in the BLAST outfmt.
-  * RESCUE high-%match / low-read: a pair with high pct_match but few matching reads is now TRUE_POSITIVE
-    (few reads that all hit the right organism is confident evidence), instead of UNCERTAIN.
   * Pairs with -max_target_seqs 100 (set in the blast rule) so the true organism is not crowded out.
 
 v2.1 classification logic (current):
   * SPECIES-LEVEL MATCHING: a species-level candidate (genus + epithet) requires BOTH genus and species
     epithet to agree. A genus-only hit or a sibling-species hit no longer confirms a species detection;
     genus-level candidates still match at the genus. (See organism_matches.)
+  * MIN MATCHING READS: TRUE_POSITIVE requires > 2 matching reads per set (min_match_reads=3). This
+    reverts the v2 single-read rescue; a handful of matching reads is not enough on its own.
   * READ FLOOR: a detection resting on a single read (n_reads == 1, trivially 100% match) is called
     UNCERTAIN, not TRUE_POSITIVE. TRUE_POSITIVE requires >= 2 reads total across the valid read sets.
 
@@ -104,7 +104,7 @@ def analyze_tsv(path: str, expected: str) -> dict:
             "pct_uncultured": pct_uncult, "expected_rank": expected_rank,
             "mean_pident": mean_pident, "top_organisms": top_orgs}
 
-def classify(r1, r2, threshold=80.0, min_match_reads=1):
+def classify(r1, r2, threshold=80.0, min_match_reads=3):
     valid = [s for s in (r1, r2) if s and s.get("status") == "complete" and s.get("n_reads", 0) > 0]
     if not valid:
         return "NO_DATA", None, None, None
@@ -117,8 +117,8 @@ def classify(r1, r2, threshold=80.0, min_match_reads=1):
         return "UNCULTURED_DOMINANT", avg_pct, avg_unc, ranks
     if avg_pct >= threshold:
         rank_ok = all(r is not None and r <= 2 for r in ranks)
-        # RESCUE: a high-%match pair with few reads (all matching) is confident TRUE. Require only
-        # >= min_match_reads (default 1) matching read in each set.
+        # require > 2 matching reads per set (min_match_reads=3): a handful of matching reads is not
+        # enough on its own to call TRUE (v2.1 reverted the v2 single-read rescue).
         reads_ok = all(n >= min_match_reads for n in n_matches)
         # v2.1 READ FLOOR: a detection resting on a single read (n_reads == 1 -> trivially 100% match)
         # is NOT called positive; it is UNCERTAIN. Require >= 2 reads total across the valid sets.
@@ -136,7 +136,7 @@ def main():
     ap.add_argument("--taxid_names", default=None)
     ap.add_argument("--output", required=True)
     ap.add_argument("--threshold", type=float, default=80.0)
-    ap.add_argument("--min_match_reads", type=int, default=1)
+    ap.add_argument("--min_match_reads", type=int, default=3)
     a = ap.parse_args()
 
     taxid_to_name = {}

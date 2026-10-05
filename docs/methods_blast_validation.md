@@ -11,8 +11,8 @@ and percent-uncultured (fraction of reads best-matching uncultured / environment
 Averaging the R1 and R2 read sets, a detection was classified as:
 - UNCULTURED_DOMINANT if more than 50% of reads best-matched uncultured/environmental/metagenome sequences;
 - TRUE_POSITIVE if at least 80% of reads matched the expected organism, the expected organism ranked in
-  the top two best-hit organisms, at least one read matched, and the read set contained at least two reads
-  (a lone matching read is not sufficient and is called UNCERTAIN);
+  the top two best-hit organisms, and more than two reads matched the expected organism (min_match_reads = 3;
+  a handful of matching reads is not sufficient and is called UNCERTAIN);
 - FALSE_POSITIVE if fewer than 10% of reads matched the expected organism;
 - UNCERTAIN otherwise; NO_DATA if no reads were recovered; BLAST_NOT_RUN if the pair was not processed.
 
@@ -21,5 +21,5 @@ species epithet, so that a genus-level hit or a sibling-species hit did not conf
 detection; genus-level candidates were matched at the genus level.
 
 Parameters: max_target_seqs = 100 (so the true organism is not crowded out of the returned hits);
-max_reads = 500 (subsample cap per read set); threshold = 80% (TRUE_POSITIVE); min_match_reads = 1 with a
-floor of 2 total reads in the set.
+max_reads = 500 (subsample cap per read set); threshold = 80% (TRUE_POSITIVE); min_match_reads = 3
+(more than two matching reads required per set).

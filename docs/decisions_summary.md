@@ -3,7 +3,7 @@
 ## BLAST false-positive thresholding rules
 - Per candidate (sample x taxid): extract the taxid's reads, subsample to <=500 read pairs (seqtk), blastn vs NCBI nt (max_target_seqs 100).
 - Each read is assigned to its single best hit by bitscore; the hit organism is compared to the expected organism.
-- TRUE_POSITIVE: >=80% of reads match the expected organism AND expected ranks in the top-2 best-hit organisms AND >=1 matching read AND >=2 reads in the set.
+- TRUE_POSITIVE: >=80% of reads match the expected organism AND expected ranks in the top-2 best-hit organisms AND more than 2 matching reads per set (min_match_reads=3) AND >=2 reads in the set.
 - FALSE_POSITIVE: <10% of reads match.
 - UNCULTURED_DOMINANT: >50% of reads best-match uncultured / environmental / metagenome sequences.
 - UNCERTAIN: anything in between; NO_DATA: no reads; BLAST_NOT_RUN: not processed.

@@ -30,4 +30,4 @@ db:           /n/netscratch/informatics/Everyone/external_repos/blast/nt/latest/
 max_target_seqs: 100     # was 20; more hits so the true organism is not crowded out
 max_reads: 500           # seqtk subsample cap per read set
 threshold: 80            # min avg pct_match (top-hit-by-bitscore) to call TRUE_POSITIVE
-min_match_reads: 1       # rescue: >=1 matching read is enough when pct_match is high (was >2)
+min_match_reads: 3       # require >2 matching reads per set for TRUE_POSITIVE (reverted the v2 rescue of 1)

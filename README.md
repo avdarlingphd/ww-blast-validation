@@ -62,9 +62,9 @@ output paths + per-sample sentinel; no other rule changes. (The `bowtie` branch 
 
 - **Top-hit-by-bitscore.** Each read is judged by its single best hit (max `bitscore`), not "any hit
   in the returned set". `bitscore` is now in the BLAST outfmt.
-- **Rescue of high-%match / low-read pairs.** A pair with high `pct_match` but few matching reads is
-  now `TRUE_POSITIVE` (a handful of reads that all hit the right organism is confident evidence),
-  instead of `UNCERTAIN`. Controlled by `min_match_reads` (default `1`; was `>2`).
+- **Minimum matching reads = `>2`.** `TRUE_POSITIVE` requires more than 2 matching reads per set
+  (`min_match_reads: 3`). The v2 single-read "rescue" (`min_match_reads: 1`) was reverted in v2.1 —
+  a handful of matching reads is not enough on its own to confirm a detection.
 - **`-max_target_seqs 100`** (was `20`) so the true organism is not crowded out of the hit list.
 - **Extraction is now part of the workflow.** The old approach BLASTed pre-extracted FASTAs sitting on
   scratch; those were purged by scratch retention, so `extract` regenerates them from the surviving
