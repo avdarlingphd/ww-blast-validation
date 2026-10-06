@@ -12,7 +12,7 @@
 ## Directory / data rules
 - Code (scripts, Snakefile, config, small resource tables) lives in the GitHub repo (avdarlingphd/ww-blast-validation).
 - Large data and outputs (extracted FASTAs, BLAST tables, reports) live on holylabs and are NOT in git (.gitignore excludes them).
-- Outputs go to holylabs (/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/blast_validation_v2), NOT netscratch (netscratch is purged).
+- Outputs go to holylabs (/n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v2 — a writable sibling of the read-only raw-data dir), NOT netscratch (netscratch is purged).
 - Single source of truth = the GitHub repo; old loose copies (Linux Scripts/, 4_blastn_validation/) are deprecated v1 and should not be run.
 
 ## Version control / reproducibility

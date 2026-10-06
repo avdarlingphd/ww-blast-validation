@@ -121,7 +121,7 @@ Code lives in git; large data and outputs live on **holylabs** (persistent) and 
 |------|-------|
 | Classifier inputs (`.kraken` / `.kreport`) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/kraken_out/kraken_output_ct0_5_min_hit_3/` |
 | QC'd paired FASTQs | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs/` |
-| **Outputs** (FASTAs, BLAST tables, report) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/blast_validation_v2/` |
+| **Outputs** (FASTAs, BLAST tables, report) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v2/` — a **writable sibling** of the read-only `ynhh_ww_rpip_2024/` project dir (keeps raw inputs locked) |
 | BLAST `nt` database | **configurable** (`db:`) — point at your local nt; prefer a dated build over `latest`. The build actually used is recorded per run in `PROVENANCE.txt`. |
 | Conda environment | `workflow/envs/environment.yaml` |
 | Candidate list + names | `resources/` (in git) |

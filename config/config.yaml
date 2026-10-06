@@ -13,9 +13,10 @@ taxid_names: resources/taxid_to_name_all_pathogens.csv       # cols: taxid,organ
 kraken_dir:  /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/kraken_out/kraken_output_ct0_5_min_hit_3
 fastq_dir:   /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs
 
-# ---- outputs (fresh v2 tree; report lands at results_dir/<detection_source>/blast_false_positive_report.tsv) ----
-# Under results_dir/<source>/:  fasta/ (extracted), blast/ (blastn results), flags/, and the report.
-results_dir: /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/blast_validation_v2
+# ---- outputs (writable sibling of the read-only project dir; keeps raw inputs locked) ----
+# report lands at results_dir/<detection_source>/blast_false_positive_report.tsv
+# Under results_dir/<source>/:  fasta/ (extracted), blast/ (blastn results), flags/, report, PROVENANCE.txt.
+results_dir: /n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v2
 
 # ---- binaries + database (holylabs conda envs; netscratch envs were purged) ----
 python:       /n/home11/avdarling/miniconda3/bin/python3
