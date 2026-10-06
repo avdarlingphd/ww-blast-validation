@@ -26,9 +26,10 @@ krakentools:  /n/home11/avdarling/KrakenTools/extract_kraken_reads.py
 blastn:       /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/ww-blast-validation/bin/blastn
 seqtk:        /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/ww-blast-validation/bin/seqtk
 # BLAST nt database. CONFIGURABLE: point this at YOUR local nt build (the path below is the FASRC copy,
-# not portable to other systems). For reproducibility prefer a DATED snapshot over 'latest' (latest is a
-# moving target). Whatever you set, each run records the actual DB build (blastdbcmd -info) in PROVENANCE.txt.
-db:           /n/netscratch/informatics/Everyone/external_repos/blast/nt/latest/nt
+# not portable to other systems). PINNED to a dated snapshot (not 'latest', which is a moving symlink);
+# 2026_09 is what 'latest' resolved to on 2026-10-06. Each run also records the DB build (blastdbcmd -info)
+# in PROVENANCE.txt. To use a newer nt later, change the date here and re-run.
+db:           /n/netscratch/informatics/Everyone/external_repos/blast/nt/2026_09/nt
 
 # ---- params (v2 refinements) ----
 max_target_seqs: 100     # was 20; more hits so the true organism is not crowded out
