@@ -21,7 +21,10 @@ run_one () {
         q="${od}/$(basename "$out" .tsv)_sub.fasta"
         "$SEQTK" sample -s 42 "$infa" "$MAX_READS" > "$q"
     fi
-    "$BLASTN" -query "$q" -db "$DB" -task blastn -num_threads "$THREADS" \
+    # -task megablast (word size 28): the fast, high-identity mode, appropriate for validating short
+    # Illumina reads against nt (10-50x faster than -task blastn). Use dc-megablast/blastn only if you
+    # need to catch divergent hits, which read-level taxonomic validation does not.
+    "$BLASTN" -query "$q" -db "$DB" -task megablast -num_threads "$THREADS" \
         -max_target_seqs "$MAX_TARGET" -outfmt "$OUTFMT" -out "$out"
 }
 run_one "$IN_R1" "$OUT_R1"
