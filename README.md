@@ -113,6 +113,16 @@ snakemake -p --profile profiles/slurm
 The SLURM profile targets FASRC partitions and needs the Snakemake SLURM executor plugin
 (`snakemake-executor-plugin-slurm`) installed alongside Snakemake for a real run.
 
+## Testing
+
+Unit tests for the classification logic (species-level matching, the TRUE/FALSE/UNCERTAIN/
+UNCULTURED_DOMINANT thresholds, the `>2` matching-reads rule) live in `tests/` and need no cluster:
+
+```bash
+pytest tests/                   # with pytest installed (it's in the env)
+python tests/test_classify.py   # no pytest needed (self-running)
+```
+
 ## Data & compute locations
 
 Code lives in git; large data and outputs live on **holylabs** (persistent) and are gitignored.

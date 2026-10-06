@@ -14,3 +14,4 @@ dependencies:
   - blast =2.15                              # blastn
   - seqtk =1.4                               # read subsampling
   - pandas =2.2
+  - pytest =8.3                              # unit tests for the classification logic (tests/)
