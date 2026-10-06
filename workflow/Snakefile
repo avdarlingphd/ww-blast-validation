@@ -6,12 +6,14 @@
 # rule and routes the whole output tree into results/<source>/, so kraken and bowtie candidate sets
 # never collide. Everything downstream of extraction (blast, classify) is shared.
 #
-# Pipeline:  extract_sample  ->  blast_pair  ->  classify
+# Pipeline:  extract_sample  ->  blast_sample  ->  classify
 #   extract_sample  ONE job per SAMPLE: read the ~5 GB .kraken + FASTQs ONCE and write the per-taxid
 #                   R1/R2 FASTAs for ALL of that sample's taxids in a single pass. A per-sample
 #                   sentinel (flags/{sample}.extracted) tells the DAG the group is done.
-#   blast_pair      per (sample,taxid): subsample to max_reads, blastn vs nt
-#   classify        aggregate all pairs -> blast_false_positive_report.tsv
+#   blast_sample    ONE job per SAMPLE: subsample each taxid's reads to max_reads, tag headers with the
+#                   taxid, and blastn ALL of the sample's candidate reads vs nt in a single pass (so the
+#                   ~1 TB nt DB loads ~250x over the run, not ~8,600x). -> one <sample>_blast_results.tsv
+#   classify        split each sample TSV back out by taxid tag -> blast_false_positive_report.tsv
 #
 # Run (from repo root, on the cluster):
 #   snakemake -p --profile profiles/slurm
@@ -24,7 +26,7 @@ configfile: "config/config.yaml"
 
 SRC        = config["detection_source"]                       # "kraken" or "bowtie"
 RESULTS    = config["results_dir"].rstrip("/") + "/" + SRC
-FASTA_TREE = RESULTS + "/fasta"                               # extracted per-pair FASTAs land here
+FASTA_TREE = RESULTS + "/fasta"                               # extracted per-taxid FASTAs land here
 BLAST_TREE = RESULTS + "/blast"
 FLAG_DIR   = RESULTS + "/flags"                               # per-sample "extraction done" sentinels
 
@@ -38,15 +40,9 @@ _df = _df.dropna()
 PAIRS   = [(r.sample, r.taxid) for r in _df.itertuples()]
 SAMPLES = sorted(_df["sample"].unique())
 
-def fasta(s, t, read):
-    return f"{FASTA_TREE}/blast_validation_{s}_{t}/{s}_taxid_{t}_{read}.fasta"
-
 def blast_outputs():
-    out = []
-    for s, t in PAIRS:
-        d = f"{BLAST_TREE}/blast_validation_{s}_{t}"
-        out += [f"{d}/{s}_taxid_{t}_R1_blast_results.tsv", f"{d}/{s}_taxid_{t}_R2_blast_results.tsv"]
-    return out
+    # one BLAST result TSV per sample (all of the sample's candidate reads, tagged by taxid)
+    return [f"{BLAST_TREE}/{s}_blast_results.tsv" for s in SAMPLES]
 
 rule all:
     input:
@@ -92,33 +88,30 @@ else:
     raise WorkflowError(f"detection_source must be 'kraken' or 'bowtie', got: {SRC!r}")
 
 # ================================================================================================
-# BLAST — one job per (sample, taxid). Depends on the per-sample extraction sentinel; the specific
-# per-pair FASTAs (created by extract_sample, empty if zero reads) are read inside blast_pair.sh,
-# which already handles empty/missing input by emitting an empty result (-> NO_DATA).
-# The "_taxid_" literal in the paths disambiguates samples from taxids.
+# BLAST — ONE job per sample. Depends on the sample's extraction sentinel; blast_sample.sh reads the
+# sample's per-taxid FASTAs (created by extract_sample, empty if zero reads), subsamples + tags each
+# read with its taxid, and blastn's them all in one pass. Empty/missing input -> empty TSV (-> NO_DATA).
 # ================================================================================================
-rule blast_pair:
+rule blast_sample:
     input:
         flag = FLAG_DIR + "/{sample}.extracted",
     output:
-        r1 = BLAST_TREE + "/blast_validation_{sample}_{taxid}/{sample}_taxid_{taxid}_R1_blast_results.tsv",
-        r2 = BLAST_TREE + "/blast_validation_{sample}_{taxid}/{sample}_taxid_{taxid}_R2_blast_results.tsv",
+        tsv = BLAST_TREE + "/{sample}_blast_results.tsv",
     params:
-        in_r1      = lambda wc: fasta(wc.sample, wc.taxid, "R1"),
-        in_r2      = lambda wc: fasta(wc.sample, wc.taxid, "R2"),
         blastn     = config["blastn"],
         seqtk      = config["seqtk"],
         db         = config["db"],
+        fasta_tree = FASTA_TREE,
         max_reads  = config["max_reads"],
         max_target = config["max_target_seqs"],
     threads: 8
     resources:
-        mem_mb  = 32000,
-        runtime = 1440,   # minutes
+        mem_mb  = 48000,
+        runtime = 720,   # minutes; one blastn over all of the sample's candidate reads
     shell:
         "BLASTN={params.blastn} SEQTK={params.seqtk} DB={params.db} "
         "MAX_READS={params.max_reads} MAX_TARGET={params.max_target} THREADS={threads} "
-        "bash workflow/scripts/blast_pair.sh {params.in_r1} {params.in_r2} {output.r1} {output.r2}"
+        "bash workflow/scripts/blast_sample.sh {wildcards.sample} {params.fasta_tree} {output.tsv}"
 
 # ================================================================================================
 # CLASSIFY — aggregate every pair's blast results into one report.

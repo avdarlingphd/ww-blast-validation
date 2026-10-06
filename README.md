@@ -20,7 +20,7 @@ tables.
 ## Pipeline
 
 ```
-extract_sample  ->  blast_pair  ->  classify
+extract_sample  ->  blast_sample  ->  classify
 ```
 
 1. **`extract_sample`** (method-specific, **batched per sample**) — regenerate the per-(sample, taxid)
@@ -40,11 +40,14 @@ extract_sample  ->  blast_pair  ->  classify
    - *Why batched:* the previous per-(sample, taxid) rule reloaded the ~5 GB `.kraken` once per taxid
      (~8,600 loads). Batching to one pass per sample (~250 loads) cuts the `.kraken` and FASTQ read
      I/O by ~34× (the mean taxids/sample) — roughly 43 TB → 1.3 TB of `.kraken` reads over a full run.
-2. **`blast_pair`** — per pair: subsample each read set to `max_reads` (`seqtk sample -s 42`), then
-   `blastn` vs `nt` with `-max_target_seqs 100` and bitscore in the outfmt. Depends on the sample's
-   extraction sentinel; reads the per-pair FASTA (empty/missing → empty result → `NO_DATA`).
-3. **`classify`** — aggregate every pair's BLAST results into
-   `results/<detection_source>/blast_false_positive_report.tsv`.
+2. **`blast_sample`** (**one job per sample**) — subsample each taxid's reads to `max_reads`
+   (`seqtk sample -s 42`), **tag every read header with its taxid** (`<taxid>|<R1|R2>|<id>`),
+   concatenate all of the sample's candidate reads, and run **one** `megablast` vs `nt` (`-task megablast`,
+   `-max_target_seqs 100`, bitscore in the outfmt). This loads the ~1 TB nt DB **once per sample (~250×)**
+   instead of once per (sample, taxid) pair (~8,600×) — the DB load dominates runtime, so this is the
+   big speedup. Output: one `<sample>_blast_results.tsv`. Empty/missing input → empty result → `NO_DATA`.
+3. **`classify`** — split each per-sample TSV back out by the taxid tag and classify every
+   (sample, taxid) into `results/<detection_source>/blast_false_positive_report.tsv`.
 
 ## Kraken vs Bowtie — a config switch, not a fork
 
@@ -54,7 +57,7 @@ extract_sample  ->  blast_pair  ->  classify
 - It routes the **entire output tree** into `results/<detection_source>/` so the two candidate sets
   never collide (`results/kraken/…`, `results/bowtie/…`).
 
-Everything downstream of extraction — `blast_pair`, `classify`, the classifier logic — is
+Everything downstream of extraction — `blast_sample`, `classify`, the classifier logic — is
 source-agnostic. Adding Bowtie later means writing one `extract_sample` variant that emits the same
 output paths + per-sample sentinel; no other rule changes. (The `bowtie` branch is currently a stub.)
 
@@ -87,11 +90,11 @@ All paths and parameters are in `config/config.yaml`.
 
 ```
 config/config.yaml            paths, params, detection_source switch
-workflow/Snakefile            rules: extract_sample (kraken) -> blast_pair -> classify
+workflow/Snakefile            rules: extract_sample (kraken) -> blast_sample -> classify
 workflow/scripts/
   extract_kraken_sample.py    kraken-variant per-sample batched read extraction (single pass)
-  blast_pair.sh               subsample + blastn for one pair
-  false_positive_detection.py v2 classifier
+  blast_sample.sh             subsample + tag by taxid + one megablast per sample
+  false_positive_detection.py v2.1 classifier (splits per-sample TSV by taxid tag)
 profiles/slurm/config.yaml    Snakemake SLURM executor profile (FASRC / cannon)
 resources/                    candidate (sample, taxid) list + taxid->name map
 ```
@@ -167,7 +170,8 @@ Older loose copies of `false_positive_detection.py` — under `.../Linux Scripts
 `.../Biofilm-Project/4_blastn_validation/` — are **deprecated v1** and must not be run. They have drifted
 from this repo; **this repository is canonical**.
 
-> **Cost warning.** A full run is **250 `extract_sample` jobs + ~8,600 `blast_pair` jobs** against
-> `nt` + 1 `classify` (~8,875 jobs total). Extraction now reads each ~5 GB `.kraken` once per sample
-> (~250 loads) instead of once per taxid (~8,600 loads). The `blastn` jobs are the expensive part;
-> do not launch the full compute without intent.
+> **Cost warning.** A full run is **250 `extract_sample` jobs + 250 `blast_sample` jobs** against
+> `nt` + 1 `classify` (~501 jobs total). Both the `.kraken` reads *and* the ~1 TB nt DB load happen
+> once per sample (~250×), not once per taxid (~8,600×) — that batching is what makes the run feasible.
+> The `megablast` jobs are still the expensive part; launch the full compute via `sbatch run_snakemake.sbatch`
+> (see below) and not without intent.

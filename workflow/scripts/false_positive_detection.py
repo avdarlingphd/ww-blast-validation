@@ -6,6 +6,12 @@ TRUE_POSITIVE / FALSE_POSITIVE / UNCERTAIN / UNCULTURED_DOMINANT / NO_DATA.
 Detection-source agnostic: works on read sets extracted from Kraken2 OR Bowtie2 candidate calls;
 the only difference upstream is how the per-(sample, taxid) FASTAs were produced.
 
+Input layout (per-sample batched BLAST):
+  BLAST is run ONCE per sample over all its candidate reads, whose headers are tagged
+  "<taxid>|<R1|R2>|<original_id>" (see blast_sample.sh). This script reads one TSV per sample
+  (<blast_dir>/<sample>_blast_results.tsv), splits rows back out by the taxid/read tag, and
+  classifies each (sample, taxid) exactly as if it had its own per-pair BLAST.
+
 v2 refinements (vs v1):
   * TOP-HIT-BY-BITSCORE: each read is judged by its single best hit (max bitscore), not "any hit among
     the returned set". Requires bitscore in the BLAST outfmt.
@@ -22,7 +28,8 @@ v2.1 classification logic (current):
 
 Usage (called by the Snakemake classify rule):
     python false_positive_detection.py --blast_dir DIR --taxid_list TSV --taxid_names CSV
-        --output report.tsv [--threshold 80] [--min_match_reads 1]
+        --output report.tsv [--threshold 80] [--min_match_reads 3]
+    (DIR holds one <sample>_blast_results.tsv per sample.)
 """
 import os, re, argparse
 import pandas as pd
@@ -68,34 +75,19 @@ def is_uncultured(org: str) -> bool:
     return any(k in lo for k in ("uncultured", "unclassified", "environmental sample",
                                  "metagenome", "synthetic construct"))
 
-def analyze_tsv(path: str, expected: str) -> dict:
-    if not path or not os.path.exists(path):
-        return {"status": "missing"}
-    if os.path.getsize(path) == 0:
+def analyze_reads(df: pd.DataFrame, expected: str) -> dict:
+    """Summarise one read set (the hits for one taxid + one read direction). df has COLS plus a
+    numeric pident/bitscore and a hit_organism column (added by load_sample)."""
+    if df is None or df.empty:
         return {"status": "empty"}
-    try:
-        df = pd.read_csv(path, sep="\t", header=None, names=COLS, dtype=str, on_bad_lines="skip")
-    except Exception as e:
-        return {"status": f"read_error: {e}"}
-    if df.empty:
-        return {"status": "empty"}
-    df["pident"] = pd.to_numeric(df["pident"], errors="coerce")
-    df["bitscore"] = pd.to_numeric(df["bitscore"], errors="coerce")
-    df["hit_organism"] = df.apply(
-        lambda r: r["sscinames"] if pd.notna(r["sscinames"]) and str(r["sscinames"]).strip() not in ("N/A", "")
-        else organism_from_stitle(r["stitle"]), axis=1)
-
     n_reads = df["qseqid"].nunique()
-    # TOP HIT PER READ = highest bitscore (ties -> first). This is the v2 change.
+    # TOP HIT PER READ = highest bitscore (ties -> first).
     top = (df.sort_values("bitscore", ascending=False, na_position="last")
              .groupby("qseqid", sort=False).first().reset_index())
-
     n_match = int(top["hit_organism"].apply(lambda o: organism_matches(o, expected)).sum())
     pct_match = round(n_match / n_reads * 100, 1) if n_reads else 0.0
-
     counts = Counter(top["hit_organism"]).most_common()   # rank by TOP-hit read counts
     expected_rank = next((i for i, (o, _) in enumerate(counts, 1) if organism_matches(o, expected)), None)
-
     n_uncult = int(top["hit_organism"].apply(is_uncultured).sum())
     pct_uncult = round(n_uncult / n_reads * 100, 1) if n_reads else 0.0
     mean_pident = round(df["pident"].mean(), 2) if not df["pident"].isna().all() else None
@@ -129,9 +121,33 @@ def classify(r1, r2, threshold=80.0, min_match_reads=3):
         return "FALSE_POSITIVE", avg_pct, avg_unc, ranks
     return "UNCERTAIN", avg_pct, avg_unc, ranks
 
+def load_sample(path: str):
+    """Load one sample's per-sample BLAST TSV. Returns None if the file is missing (-> BLAST_NOT_RUN),
+    or a DataFrame (possibly empty) with parsed taxid/read tags + hit_organism."""
+    empty = pd.DataFrame(columns=COLS + ["taxid", "read", "hit_organism"])
+    if not path or not os.path.exists(path):
+        return None
+    if os.path.getsize(path) == 0:
+        return empty
+    try:
+        df = pd.read_csv(path, sep="\t", header=None, names=COLS, dtype=str, on_bad_lines="skip")
+    except Exception:
+        return empty
+    if df.empty:
+        return empty
+    tags = df["qseqid"].str.split("|", n=2, expand=True)
+    df["taxid"] = tags[0]
+    df["read"] = tags[1] if tags.shape[1] > 1 else None
+    df["pident"] = pd.to_numeric(df["pident"], errors="coerce")
+    df["bitscore"] = pd.to_numeric(df["bitscore"], errors="coerce")
+    df["hit_organism"] = df.apply(
+        lambda r: r["sscinames"] if pd.notna(r["sscinames"]) and str(r["sscinames"]).strip() not in ("N/A", "")
+        else organism_from_stitle(r["stitle"]), axis=1)
+    return df
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--blast_dir", required=True)
+    ap.add_argument("--blast_dir", required=True, help="dir with one <sample>_blast_results.tsv per sample")
     ap.add_argument("--taxid_list", required=True)
     ap.add_argument("--taxid_names", default=None)
     ap.add_argument("--output", required=True)
@@ -143,27 +159,30 @@ def main():
     if a.taxid_names and os.path.exists(a.taxid_names):
         tn = pd.read_csv(a.taxid_names)
         taxid_to_name = dict(zip(tn["taxid"].astype(str), tn["organism_name"]))
-    samples = pd.read_csv(a.taxid_list, sep="\t", header=None, names=["sample", "taxid"])
-    samples["taxid"] = samples["taxid"].astype(str)
+    pairs = pd.read_csv(a.taxid_list, sep="\t", header=None, names=["sample", "taxid"], dtype=str).dropna()
+    pairs["taxid"] = pairs["taxid"].astype(str)
 
     rows = []
-    for _, row in samples.iterrows():
-        sample, taxid = row["sample"], row["taxid"]
-        expected = taxid_to_name.get(taxid, f"taxid_{taxid}")
-        d = os.path.join(a.blast_dir, f"blast_validation_{sample}_{taxid}")
-        r1 = analyze_tsv(os.path.join(d, f"{sample}_taxid_{taxid}_R1_blast_results.tsv"), expected)
-        r2 = analyze_tsv(os.path.join(d, f"{sample}_taxid_{taxid}_R2_blast_results.tsv"), expected)
-        label, avg_pct, avg_unc, ranks = classify(r1, r2, a.threshold, a.min_match_reads)
-        if not os.path.isdir(d):
-            label = "BLAST_NOT_RUN"
-        rows.append({"sample": sample, "taxid": taxid, "expected_organism": expected,
-                     "classification": label, "avg_pct_match": avg_pct, "avg_pct_uncultured": avg_unc,
-                     "R1_n_reads": r1.get("n_reads"), "R1_n_match": r1.get("n_match"),
-                     "R1_pct_match": r1.get("pct_match"), "R1_expected_rank": r1.get("expected_rank"),
-                     "R1_top_organisms": r1.get("top_organisms"),
-                     "R2_n_reads": r2.get("n_reads"), "R2_n_match": r2.get("n_match"),
-                     "R2_pct_match": r2.get("pct_match"), "R2_expected_rank": r2.get("expected_rank"),
-                     "R2_top_organisms": r2.get("top_organisms")})
+    for sample, grp in pairs.groupby("sample", sort=True):
+        df = load_sample(os.path.join(a.blast_dir, f"{sample}_blast_results.tsv"))
+        for taxid in grp["taxid"]:
+            expected = taxid_to_name.get(taxid, f"taxid_{taxid}")
+            if df is None:                                   # per-sample BLAST never produced
+                label, avg_pct, avg_unc = "BLAST_NOT_RUN", None, None
+                r1 = r2 = {}
+            else:
+                sub = df[df["taxid"] == taxid]
+                r1 = analyze_reads(sub[sub["read"] == "R1"], expected)
+                r2 = analyze_reads(sub[sub["read"] == "R2"], expected)
+                label, avg_pct, avg_unc, _ = classify(r1, r2, a.threshold, a.min_match_reads)
+            rows.append({"sample": sample, "taxid": taxid, "expected_organism": expected,
+                         "classification": label, "avg_pct_match": avg_pct, "avg_pct_uncultured": avg_unc,
+                         "R1_n_reads": r1.get("n_reads"), "R1_n_match": r1.get("n_match"),
+                         "R1_pct_match": r1.get("pct_match"), "R1_expected_rank": r1.get("expected_rank"),
+                         "R1_top_organisms": r1.get("top_organisms"),
+                         "R2_n_reads": r2.get("n_reads"), "R2_n_match": r2.get("n_match"),
+                         "R2_pct_match": r2.get("pct_match"), "R2_expected_rank": r2.get("expected_rank"),
+                         "R2_top_organisms": r2.get("top_organisms")})
     out = pd.DataFrame(rows)
     print("CLASSIFICATION SUMMARY")
     for lab, c in out["classification"].value_counts().items():

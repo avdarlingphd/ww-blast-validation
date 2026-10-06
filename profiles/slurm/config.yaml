@@ -4,7 +4,7 @@
 # listed partition can start it first. All three must be usable under slurm_account; verify with
 # `sacctmgr -n show assoc user=$USER format=account,partition%20 | sort -u` before a real run.
 executor: slurm
-jobs: 200                      # max concurrently-submitted jobs (throttles the ~8,600 blast jobs)
+jobs: 200                      # max concurrently-submitted jobs (now ~250 blast_sample jobs + 250 extract)
 default-resources:
   slurm_account: hhealy_lab
   slurm_partition: hsph,sapphire,shared
@@ -15,16 +15,16 @@ set-resources:
     mem_mb: 16000
     runtime: 180
     cpus_per_task: 2
-  blast_pair:                  # blastn vs nt on subsampled reads
-    mem_mb: 24000
-    runtime: 240
+  blast_sample:                # ONE blastn vs nt over all the sample's tagged candidate reads
+    mem_mb: 48000
+    runtime: 720
     cpus_per_task: 8
-  classify:
-    mem_mb: 4000
-    runtime: 30
+  classify:                    # parses every per-sample TSV; bigger than the old per-pair classify
+    mem_mb: 16000
+    runtime: 120
     cpus_per_task: 1
 set-threads:
-  blast_pair: 8
+  blast_sample: 8
 restart-times: 1
 latency-wait: 60
 rerun-incomplete: true
