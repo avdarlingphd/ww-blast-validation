@@ -18,11 +18,13 @@ fastq_dir:   /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs
 # Under results_dir/<source>/:  fasta/ (extracted), blast/ (blastn results), flags/, report, PROVENANCE.txt.
 results_dir: /n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v2
 
-# ---- binaries + database (holylabs conda envs; netscratch envs were purged) ----
-python:       /n/home11/avdarling/miniconda3/bin/python3
+# ---- binaries + database ----
+# python/blastn/seqtk all come from the single ww-blast-validation env (built from
+# workflow/envs/environment.yaml), so the pipeline is self-contained and reproducible.
+python:       /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/ww-blast-validation/bin/python
 krakentools:  /n/home11/avdarling/KrakenTools/extract_kraken_reads.py
-blastn:       /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/blast_env/bin/blastn
-seqtk:        /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/seqtk_env/bin/seqtk
+blastn:       /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/ww-blast-validation/bin/blastn
+seqtk:        /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/ww-blast-validation/bin/seqtk
 # BLAST nt database. CONFIGURABLE: point this at YOUR local nt build (the path below is the FASRC copy,
 # not portable to other systems). For reproducibility prefer a DATED snapshot over 'latest' (latest is a
 # moving target). Whatever you set, each run records the actual DB build (blastdbcmd -info) in PROVENANCE.txt.
