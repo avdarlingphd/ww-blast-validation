@@ -1,11 +1,13 @@
 # Snakemake SLURM profile for FASRC / Cannon (HSPH allocation).
 # Requires snakemake + snakemake-executor-plugin-slurm in the active env.
-# Partition is hsph (lab policy); verify slurm_account matches the hsph allocation before a real run.
+# Partition is hsph (lab policy) with sapphire,shared as fallbacks — SLURM runs each job on whichever
+# listed partition can start it first. All three must be usable under slurm_account; verify with
+# `sacctmgr -n show assoc user=$USER format=account,partition%20 | sort -u` before a real run.
 executor: slurm
 jobs: 200                      # max concurrently-submitted jobs (throttles the ~8,600 blast jobs)
 default-resources:
   slurm_account: hhealy_lab
-  slurm_partition: hsph
+  slurm_partition: hsph,sapphire,shared
   mem_mb: 8000
   runtime: 120                 # minutes
 set-resources:
