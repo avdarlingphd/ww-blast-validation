@@ -16,8 +16,8 @@ set-resources:
     runtime: 180
     cpus_per_task: 2
   blast_sample:                # ONE blastn vs nt over all the sample's tagged candidate reads
-    mem_mb: 48000
-    runtime: 720
+    mem_mb: 32000              # observed peak ~12 GB (one 39-taxid sample); 32 GB = headroom + schedules easily
+    runtime: 720              # minutes; observed ~4 h for a 39-taxid sample, 12 h cap is safe
     cpus_per_task: 8
   classify:                    # parses every per-sample TSV; bigger than the old per-pair classify
     mem_mb: 16000
