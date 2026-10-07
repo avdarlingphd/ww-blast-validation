@@ -1,10 +1,13 @@
 # ww-blast-validation
 
-A Snakemake workflow that BLAST-validates candidate pathogen detections in hospital wastewater
-metagenomes and filters out taxonomic-classifier false positives.
+A Snakemake workflow that BLAST-validates candidate taxonomic classifications (e.g. Kraken2 or Bowtie2
+calls) in metagenomic samples and filters out classifier false positives. It was built for
+hospital-wastewater pathogen surveillance, but the logic is general: give it a list of
+`(sample, taxid)` candidate detections plus the reads behind them, and it reports which calls a
+rigorous BLAST re-check actually supports.
 
 For each **(sample, taxid)** candidate detection, the pipeline pulls the reads the classifier assigned
-to that taxid, BLASTs them against NCBI `nt`, and labels the call:
+to that taxid, BLASTs them against a nucleotide database (NCBI `nt`), and labels the call:
 
 | Classification        | Meaning |
 |-----------------------|---------|
@@ -14,8 +17,8 @@ to that taxid, BLASTs them against NCBI `nt`, and labels the call:
 | `UNCULTURED_DOMINANT` | Top hits are dominated by uncultured / environmental / metagenome entries (`> 50%`). |
 | `NO_DATA`             | No reads were extracted for this taxid, so there was nothing to BLAST (empty/missing FASTA). |
 
-This is how Kraken2 (or, later, Bowtie2) false positives are removed from the wastewater pathogen
-tables.
+This removes taxonomic-classifier (Kraken2, or later Bowtie2) false positives from your detection
+tables before downstream analysis.
 
 ## Pipeline
 
@@ -61,30 +64,34 @@ Everything downstream of extraction — `blast_sample`, `classify`, the classifi
 source-agnostic. Adding Bowtie later means writing one `extract_sample` variant that emits the same
 output paths + per-sample sentinel; no other rule changes. (The `bowtie` branch is currently a stub.)
 
-## v2 refinements (vs the original per-job shell scripts)
+## Classification rules
 
-- **Top-hit-by-bitscore.** Each read is judged by its single best hit (max `bitscore`), not "any hit
-  in the returned set". `bitscore` is now in the BLAST outfmt.
-- **Minimum matching reads = `>2`.** `TRUE_POSITIVE` requires more than 2 matching reads per set
-  (`min_match_reads: 3`). The v2 single-read "rescue" (`min_match_reads: 1`) was reverted in v2.1 —
-  a handful of matching reads is not enough on its own to confirm a detection.
-- **`-max_target_seqs 100`** (was `20`) so the true organism is not crowded out of the hit list.
-- **Extraction is now part of the workflow.** The old approach BLASTed pre-extracted FASTAs sitting on
-  scratch; those were purged by scratch retention, so `extract` regenerates them from the surviving
-  Kraken2 outputs + FASTQs.
+All thresholds live in `config/config.yaml`.
 
-## Inputs and data provenance
+- **Top hit per read, by bitscore.** Each read is judged by its single best BLAST hit (max `bitscore`),
+  not by any hit in the returned set.
+- **Species-level matching.** A species-level candidate requires the hit to agree at BOTH genus and
+  species epithet; a genus-only or sibling-species hit does not confirm it. Genus-level candidates match
+  at the genus.
+- **`TRUE_POSITIVE`** needs `avg_pct_match ≥ threshold` (default 80), the expected organism in the top 2
+  best-hit organisms, and more than `min_match_reads` matching reads per set (default `3`, i.e. > 2).
+  A single-read call is never positive.
+- **`FALSE_POSITIVE`** is `avg_pct_match < 10%`; **`UNCULTURED_DOMINANT`** is `> 50%` uncultured /
+  environmental hits; anything in between is **`UNCERTAIN`**.
+- **`-max_target_seqs 100`** so the true organism is not crowded out of the hit list.
 
-Persistent inputs live on **holylabs** (the netscratch working copies were purged by scratch
-retention):
+See `CHANGELOG.md` for version history.
 
-- Kraken2 per-read output + report: `…/ynhh_ww_rpip_2024/kraken_out/kraken_output_ct0_5_min_hit_3/{sample}.kraken` / `.kreport`
-- QC'd/dehosted paired FASTQs: `…/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs/{sample}_R1.fastq.gz` / `_R2.fastq.gz`
-- BLAST `nt`: `/n/netscratch/informatics/Everyone/external_repos/blast/nt/latest/nt`
-- Candidate list + names: `resources/sample_taxid_list_all_pathogens.tsv`, `resources/taxid_to_name_all_pathogens.csv`
-  (8,622 pairs across 250 samples / 142 pathogen taxids).
+## Inputs
 
-All paths and parameters are in `config/config.yaml`.
+Set all paths and parameters in `config/config.yaml`. Per sample the pipeline needs:
+
+- the classifier's per-read output + report (Kraken2 `.kraken` / `.kreport`);
+- the QC'd paired FASTQs (`{sample}_R1.fastq.gz` / `_R2.fastq.gz`);
+- a BLAST nucleotide database (`db:` — point at your own `nt`);
+
+plus two small, in-repo tables: the candidate `(sample, taxid)` list and a `taxid → organism name` map
+(`resources/`). Concrete values for the Healy-lab / FASRC deployment are in the example table below.
 
 ## Layout
 
@@ -126,9 +133,10 @@ pytest tests/                   # with pytest installed (it's in the env)
 python tests/test_classify.py   # no pytest needed (self-running)
 ```
 
-## Data & compute locations
+## Example configuration (Healy lab / FASRC)
 
-Code lives in git; large data and outputs live on **holylabs** (persistent) and are gitignored.
+The concrete paths for our deployment — substitute your own in `config/config.yaml`. Code lives in git;
+large data and outputs live on **holylabs** (persistent) and are gitignored.
 
 | What | Where |
 |------|-------|
@@ -163,12 +171,6 @@ a *clone* of it, never a hand-copied folder — that is what prevents running a 
   So every report traces to the exact code, settings, and reference database that produced it — without
   hard-coding any machine-specific path.
 - Tag pipeline versions (`git tag v2 && git push --tags`) so a result maps to a fixed code state.
-
-### Deprecated copies
-
-Older loose copies of `false_positive_detection.py` — under `.../Linux Scripts/` and
-`.../Biofilm-Project/4_blastn_validation/` — are **deprecated v1** and must not be run. They have drifted
-from this repo; **this repository is canonical**.
 
 > **Cost warning.** A full run is **250 `extract_sample` jobs + 250 `blast_sample` jobs** against
 > `nt` + 1 `classify` (~501 jobs total). Both the `.kraken` reads *and* the ~1 TB nt DB load happen
