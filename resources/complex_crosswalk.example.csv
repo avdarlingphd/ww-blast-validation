@@ -1,0 +1,43 @@
+# PROVISIONAL species-complex crosswalk (EXAMPLE / placeholder).
+# ---------------------------------------------------------------------------------------------
+# This is a standard-taxonomy starting point. REPLACE it with the real complex definitions for your
+# setting before reporting: the RPIP panel v1 complex scheme and/or the YNHH clinical complex scheme
+# (both TBD as of 2026-10). Point config `complex_crosswalk:` at your chosen file; keep separate files
+# (e.g. rpip_v1_complexes.csv, ynhh_complexes.csv) and run each to compare.
+#
+# Format: two columns, one row per member species.
+#   complex_name       -> the complex label (free text)
+#   member_organism    -> a member species (Genus species); matching is name-based (genus + epithet),
+#                         so taxids are not needed and misnumbering can't bite you.
+# A candidate whose expected organism is listed here is also scored at the complex level: a read counts
+# as a complex match if its best hit is ANY member of that complex. Lines starting with # are ignored.
+complex_name,member_organism
+Acinetobacter calcoaceticus-baumannii (ACB) complex,Acinetobacter baumannii
+Acinetobacter calcoaceticus-baumannii (ACB) complex,Acinetobacter nosocomialis
+Acinetobacter calcoaceticus-baumannii (ACB) complex,Acinetobacter pittii
+Acinetobacter calcoaceticus-baumannii (ACB) complex,Acinetobacter calcoaceticus
+Acinetobacter calcoaceticus-baumannii (ACB) complex,Acinetobacter seifertii
+Acinetobacter calcoaceticus-baumannii (ACB) complex,Acinetobacter dijkshoorniae
+Acinetobacter calcoaceticus-baumannii (ACB) complex,Acinetobacter lactis
+Enterobacter cloacae complex,Enterobacter cloacae
+Enterobacter cloacae complex,Enterobacter hormaechei
+Enterobacter cloacae complex,Enterobacter asburiae
+Enterobacter cloacae complex,Enterobacter kobei
+Enterobacter cloacae complex,Enterobacter ludwigii
+Enterobacter cloacae complex,Enterobacter roggenkampii
+Enterobacter cloacae complex,Enterobacter bugandensis
+Klebsiella pneumoniae complex,Klebsiella pneumoniae
+Klebsiella pneumoniae complex,Klebsiella variicola
+Klebsiella pneumoniae complex,Klebsiella quasipneumoniae
+Klebsiella pneumoniae complex,Klebsiella quasivariicola
+Klebsiella pneumoniae complex,Klebsiella africana
+Citrobacter freundii complex,Citrobacter freundii
+Citrobacter freundii complex,Citrobacter braakii
+Citrobacter freundii complex,Citrobacter werkmanii
+Citrobacter freundii complex,Citrobacter youngae
+Citrobacter freundii complex,Citrobacter portucalensis
+Escherichia-Shigella group,Escherichia coli
+Escherichia-Shigella group,Shigella flexneri
+Escherichia-Shigella group,Shigella sonnei
+Escherichia-Shigella group,Shigella boydii
+Escherichia-Shigella group,Shigella dysenteriae

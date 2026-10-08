@@ -75,19 +75,75 @@ def is_uncultured(org: str) -> bool:
     return any(k in lo for k in ("uncultured", "unclassified", "environmental sample",
                                  "metagenome", "synthetic construct"))
 
-def analyze_reads(df: pd.DataFrame, expected: str) -> dict:
+# ---- species-complex support (OPTIONAL) -----------------------------------------------------------
+# A user-supplied crosswalk (complex_name, member_organism) lets each candidate also be scored at the
+# complex level: a read counts as a complex match if its best hit is ANY member of the candidate's
+# complex. Matching is name-based (genus + species epithet), so it is independent of taxids.
+
+def _name_key(name: str):
+    t = _tokens(name)
+    if not t:
+        return None
+    return (t[0], t[1]) if len(t) >= 2 else (t[0],)
+
+def load_complex_crosswalk(path):
+    """Returns (member_to_complex, complex_members): a dict mapping each member's name-key -> complex
+    name, and a dict mapping complex name -> list of member token-lists. Empty if no/absent path."""
+    if not path or not os.path.exists(path):
+        return {}, {}
+    df = pd.read_csv(path, comment="#")
+    df.columns = [c.strip().lower() for c in df.columns]
+    member_to_complex, complex_members = {}, {}
+    for _, r in df.iterrows():
+        cx = str(r.get("complex_name", "")).strip()
+        org = str(r.get("member_organism", "")).strip()
+        toks = _tokens(org)
+        key = _name_key(org)
+        if not cx or not toks or key is None:
+            continue
+        member_to_complex[key] = cx
+        complex_members.setdefault(cx, []).append(toks)
+    return member_to_complex, complex_members
+
+def candidate_complex(expected, member_to_complex):
+    """The complex an expected organism belongs to (by name), or None."""
+    key = _name_key(expected)
+    return member_to_complex.get(key) if key else None
+
+def make_complex_matcher(members):
+    """A predicate hit_organism -> bool: does the hit match ANY member of the complex? (genus+epithet,
+    or genus-only for a genus-level member)."""
+    def mf(hit):
+        if not hit or hit.lower() in ("unknown", "n/a", ""):
+            return False
+        h = _tokens(hit)
+        if not h:
+            return False
+        for m in members:
+            if len(m) == 1:
+                if h[0] == m[0]:
+                    return True
+            elif len(h) >= 2 and h[0] == m[0] and h[1] == m[1]:
+                return True
+        return False
+    return mf
+
+def analyze_reads(df: pd.DataFrame, expected: str, match_fn=None) -> dict:
     """Summarise one read set (the hits for one taxid + one read direction). df has COLS plus a
-    numeric pident/bitscore and a hit_organism column (added by load_sample)."""
+    numeric pident/bitscore and a hit_organism column (added by load_sample).
+    match_fn(hit_organism)->bool decides what counts as a match; default = species-level
+    organism_matches(o, expected). Pass a complex matcher to score at the complex level instead."""
     if df is None or df.empty:
         return {"status": "empty"}
+    mf = match_fn if match_fn is not None else (lambda o: organism_matches(o, expected))
     n_reads = df["qseqid"].nunique()
     # TOP HIT PER READ = highest bitscore (ties -> first).
     top = (df.sort_values("bitscore", ascending=False, na_position="last")
              .groupby("qseqid", sort=False).first().reset_index())
-    n_match = int(top["hit_organism"].apply(lambda o: organism_matches(o, expected)).sum())
+    n_match = int(top["hit_organism"].apply(mf).sum())
     pct_match = round(n_match / n_reads * 100, 1) if n_reads else 0.0
     counts = Counter(top["hit_organism"]).most_common()   # rank by TOP-hit read counts
-    expected_rank = next((i for i, (o, _) in enumerate(counts, 1) if organism_matches(o, expected)), None)
+    expected_rank = next((i for i, (o, _) in enumerate(counts, 1) if mf(o)), None)
     n_uncult = int(top["hit_organism"].apply(is_uncultured).sum())
     pct_uncult = round(n_uncult / n_reads * 100, 1) if n_reads else 0.0
     mean_pident = round(df["pident"].mean(), 2) if not df["pident"].isna().all() else None
@@ -153,12 +209,15 @@ def main():
     ap.add_argument("--output", required=True)
     ap.add_argument("--threshold", type=float, default=80.0)
     ap.add_argument("--min_match_reads", type=int, default=3)
+    ap.add_argument("--complex_crosswalk", default=None,
+                    help="optional CSV (complex_name,member_organism); adds complex-level columns")
     a = ap.parse_args()
 
     taxid_to_name = {}
     if a.taxid_names and os.path.exists(a.taxid_names):
         tn = pd.read_csv(a.taxid_names)
         taxid_to_name = dict(zip(tn["taxid"].astype(str), tn["organism_name"]))
+    member_to_complex, complex_members = load_complex_crosswalk(a.complex_crosswalk)
     pairs = pd.read_csv(a.taxid_list, sep="\t", header=None, names=["sample", "taxid"], dtype=str).dropna()
     pairs["taxid"] = pairs["taxid"].astype(str)
 
@@ -167,14 +226,24 @@ def main():
         df = load_sample(os.path.join(a.blast_dir, f"{sample}_blast_results.tsv"))
         for taxid in grp["taxid"]:
             expected = taxid_to_name.get(taxid, f"taxid_{taxid}")
+            cx = candidate_complex(expected, member_to_complex)   # complex name, or None
             if df is None:                                   # per-sample BLAST never produced
                 label, avg_pct, avg_unc = "BLAST_NOT_RUN", None, None
                 r1 = r2 = {}
+                cx_label, cx_pct = ("BLAST_NOT_RUN" if cx else ""), None
             else:
                 sub = df[df["taxid"] == taxid]
-                r1 = analyze_reads(sub[sub["read"] == "R1"], expected)
-                r2 = analyze_reads(sub[sub["read"] == "R2"], expected)
+                sub_r1, sub_r2 = sub[sub["read"] == "R1"], sub[sub["read"] == "R2"]
+                r1 = analyze_reads(sub_r1, expected)
+                r2 = analyze_reads(sub_r2, expected)
                 label, avg_pct, avg_unc, _ = classify(r1, r2, a.threshold, a.min_match_reads)
+                if cx:                                       # also score at the complex level
+                    mf = make_complex_matcher(complex_members[cx])
+                    c1 = analyze_reads(sub_r1, expected, match_fn=mf)
+                    c2 = analyze_reads(sub_r2, expected, match_fn=mf)
+                    cx_label, cx_pct, _, _ = classify(c1, c2, a.threshold, a.min_match_reads)
+                else:
+                    cx_label, cx_pct = "", None
             rows.append({"sample": sample, "taxid": taxid, "expected_organism": expected,
                          "classification": label, "avg_pct_match": avg_pct, "avg_pct_uncultured": avg_unc,
                          "R1_n_reads": r1.get("n_reads"), "R1_n_match": r1.get("n_match"),
@@ -182,11 +251,18 @@ def main():
                          "R1_top_organisms": r1.get("top_organisms"),
                          "R2_n_reads": r2.get("n_reads"), "R2_n_match": r2.get("n_match"),
                          "R2_pct_match": r2.get("pct_match"), "R2_expected_rank": r2.get("expected_rank"),
-                         "R2_top_organisms": r2.get("top_organisms")})
+                         "R2_top_organisms": r2.get("top_organisms"),
+                         "complex_name": cx or "", "complex_classification": cx_label,
+                         "avg_complex_pct_match": cx_pct})
     out = pd.DataFrame(rows)
-    print("CLASSIFICATION SUMMARY")
+    print("CLASSIFICATION SUMMARY (species level)")
     for lab, c in out["classification"].value_counts().items():
         print(f"  {lab:<22} {c:>5} ({c/len(out)*100:.1f}%)")
+    if member_to_complex:
+        cxrows = out[out["complex_name"] != ""]
+        print(f"\nCOMPLEX-LEVEL SUMMARY ({len(cxrows)} candidates in a complex)")
+        for lab, c in cxrows["complex_classification"].value_counts().items():
+            print(f"  {lab:<22} {c:>5}")
     os.makedirs(os.path.dirname(a.output) or ".", exist_ok=True)
     out.to_csv(a.output, sep="\t", index=False)
     print(f"\nreport -> {a.output}")

@@ -3,6 +3,15 @@
 Version history for the pipeline. The README describes current behavior; this file records how it
 got there.
 
+## v2.2
+- Optional **species-complex scoring**: a user-supplied `complex_crosswalk` (complex_name, member_organism)
+  adds complex-level columns (`complex_name`, `complex_classification`, `avg_complex_pct_match`) alongside
+  the species-level call, so complex members split across siblings (ACB, E. cloacae, K. pneumoniae, …) are
+  recognized at the complex level. Name-based, backward-compatible (blank crosswalk = species-level only).
+  Ships a PROVISIONAL `resources/complex_crosswalk.example.csv` to be replaced by the real
+  RPIP-panel / clinical complex scheme.
+- Added `config/config.example.yaml` template (placeholder paths) to make the tool easy to reuse elsewhere.
+
 ## v2.1
 - **Species-level organism matching** in the classifier: a species-level candidate requires the hit to
   agree at BOTH genus and species epithet; a genus-only or sibling-species hit no longer confirms it.

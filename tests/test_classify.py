@@ -14,6 +14,7 @@ Run either way:
 """
 import importlib.util
 import os
+import pandas as pd
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SRC = os.path.join(_HERE, "..", "workflow", "scripts", "false_positive_detection.py")
@@ -94,6 +95,53 @@ def test_expected_rank_worse_than_two_is_uncertain():
 def test_no_data_when_no_reads():
     label, *_ = fp.classify(None, None)
     assert label == "NO_DATA"
+
+
+# ---- complex-aware scoring --------------------------------------------------
+def _crosswalk(members_by_complex):
+    """Build (member_to_complex, complex_members) like load_complex_crosswalk would, in memory."""
+    m2c, members = {}, {}
+    for cx, orgs in members_by_complex.items():
+        for org in orgs:
+            m2c[fp._name_key(org)] = cx
+            members.setdefault(cx, []).append(fp._tokens(org))
+    return m2c, members
+
+def _reads_df(pairs):
+    """A per-read-set DataFrame (one row per read = its top hit), shaped like load_sample output."""
+    return pd.DataFrame([
+        {"qseqid": q, "sscinames": "N/A", "pident": 100.0, "length": 150,
+         "evalue": 0.0, "bitscore": 200.0, "stitle": org, "hit_organism": org}
+        for q, org in pairs])
+
+def test_candidate_complex_lookup():
+    m2c, _ = _crosswalk({"ACB": ["Acinetobacter baumannii", "Acinetobacter nosocomialis"]})
+    assert fp.candidate_complex("Acinetobacter baumannii", m2c) == "ACB"
+    assert fp.candidate_complex("Acinetobacter nosocomialis", m2c) == "ACB"
+    assert fp.candidate_complex("Escherichia coli", m2c) is None
+
+def test_complex_matcher_matches_any_member():
+    _, members = _crosswalk({"ACB": ["Acinetobacter baumannii", "Acinetobacter nosocomialis"]})
+    mf = fp.make_complex_matcher(members["ACB"])
+    assert mf("Acinetobacter baumannii")
+    assert mf("Acinetobacter nosocomialis strain X")   # sibling member -> complex match
+    assert not mf("Klebsiella pneumoniae")             # outside the complex
+
+def test_complex_rescues_species_split():
+    # 6 reads: 3 hit A. baumannii, 3 hit A. nosocomialis (same ACB complex)
+    df = _reads_df([("r1", "Acinetobacter baumannii"), ("r2", "Acinetobacter baumannii"),
+                    ("r3", "Acinetobacter baumannii"), ("r4", "Acinetobacter nosocomialis"),
+                    ("r5", "Acinetobacter nosocomialis"), ("r6", "Acinetobacter nosocomialis")])
+    _, members = _crosswalk({"ACB": ["Acinetobacter baumannii", "Acinetobacter nosocomialis"]})
+    # species level: only 3/6 match A. baumannii -> UNCERTAIN
+    sp = fp.analyze_reads(df, "Acinetobacter baumannii")
+    assert sp["pct_match"] == 50.0
+    assert fp.classify(sp, None)[0] == "UNCERTAIN"
+    # complex level: all 6 match the ACB complex -> TRUE_POSITIVE
+    mf = fp.make_complex_matcher(members["ACB"])
+    cx = fp.analyze_reads(df, "Acinetobacter baumannii", match_fn=mf)
+    assert cx["pct_match"] == 100.0
+    assert fp.classify(cx, None)[0] == "TRUE_POSITIVE"
 
 
 if __name__ == "__main__":

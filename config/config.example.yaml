@@ -1,0 +1,44 @@
+# ww-blast-validation — CONFIG TEMPLATE
+# Copy this to config/config.yaml and fill in your own paths:
+#     cp config/config.example.yaml config/config.yaml
+# Every value marked <...> is a placeholder you must set. Paths without <...> are in-repo and usually fine.
+
+# detection_source routes inputs+outputs so Kraken and Bowtie candidate sets never collide.
+detection_source: kraken          # kraken | bowtie
+
+# ---- candidate list (in-repo; small, version-controlled). Paths are relative to the repo root. ----
+taxid_list:  resources/sample_taxid_list_all_pathogens.tsv   # cols: sample<TAB>taxid  (no header)
+taxid_names: resources/taxid_to_name_all_pathogens.csv       # cols: taxid,organism_name
+
+# ---- extraction inputs (kraken variant) ----
+# Per-read Kraken2 output (.kraken) + report (.kreport) keyed by {sample}; QC'd paired FASTQs
+# {sample}_R1/R2.fastq.gz. The extract rule regenerates per-taxid FASTAs from these.
+kraken_dir:  <path/to/kraken_output_dir>     # contains {sample}.kraken and {sample}.kreport
+fastq_dir:   <path/to/fastq_dir>             # contains {sample}_R1.fastq.gz and {sample}_R2.fastq.gz
+
+# ---- outputs (use a WRITABLE dir; keep raw inputs read-only elsewhere) ----
+# report lands at results_dir/<detection_source>/blast_false_positive_report.tsv (+ PROVENANCE.txt).
+results_dir: <path/to/writable/results_dir>
+
+# ---- binaries + database ----
+# Simplest: one conda env (built from workflow/envs/environment.yaml) providing python/blastn/seqtk.
+python:       <path/to/env>/bin/python
+krakentools:  <path/to/KrakenTools/extract_kraken_reads.py>   # only used by some variants; optional
+blastn:       <path/to/env>/bin/blastn
+seqtk:        <path/to/env>/bin/seqtk
+# BLAST nucleotide database. Point at YOUR local nt build. For reproducibility PIN a dated snapshot
+# (not a rolling 'latest'); each run records the actual build via blastdbcmd -info in PROVENANCE.txt.
+db:           <path/to/nt/YYYY_MM/nt>
+
+# ---- species-complex crosswalk (OPTIONAL) ----
+# Leave blank/omit for species-level only (the default). Set to a crosswalk CSV (complex_name,member_organism)
+# to ALSO score each candidate at the complex level, tailored to your panel / clinical scheme.
+# resources/complex_crosswalk.example.csv is a PROVISIONAL placeholder — replace with the real
+# RPIP-panel / clinical complex definitions for your setting.
+complex_crosswalk:            # e.g. resources/complex_crosswalk.example.csv  (blank = species-level only)
+
+# ---- params ----
+max_target_seqs: 100     # BLAST -max_target_seqs; enough hits that the true organism isn't crowded out
+max_reads: 500           # seqtk subsample cap per read set
+threshold: 80            # min avg pct_match (top-hit-by-bitscore) to call TRUE_POSITIVE
+min_match_reads: 3       # require >2 matching reads per set for TRUE_POSITIVE

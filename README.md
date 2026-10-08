@@ -82,9 +82,28 @@ All thresholds live in `config/config.yaml`.
 
 See `CHANGELOG.md` for version history.
 
+## Species-complex scoring (optional)
+
+Many hospital pathogens are reported at the **complex** level (e.g. the *Acinetobacter calcoaceticus–
+baumannii* complex, *Enterobacter cloacae* complex, *Klebsiella pneumoniae* complex), and reads often
+split across sibling species in the same complex — leaving a species-level call UNCERTAIN even though the
+complex is clearly present.
+
+Set `complex_crosswalk:` in the config to a CSV of `complex_name,member_organism` rows, and every candidate
+that belongs to a complex is **also** scored at the complex level (a read counts if its best hit is ANY
+member). Three extra columns appear in the report — `complex_name`, `complex_classification`,
+`avg_complex_pct_match` — while the species-level columns are unchanged, so you get both views.
+
+- Matching is **name-based** (genus + species epithet), so the crosswalk needs no taxids.
+- Leave `complex_crosswalk:` blank for species-level only (the default; fully backward-compatible).
+- `resources/complex_crosswalk.example.csv` is a **provisional** standard-taxonomy crosswalk — replace it
+  with the complex scheme for your setting (an RPIP-panel or clinical-lab scheme). Keep separate crosswalk
+  files and swap the path to compare schemes; the one used is recorded in `PROVENANCE.txt`.
+
 ## Inputs
 
-Set all paths and parameters in `config/config.yaml`. Per sample the pipeline needs:
+Start from the template (`cp config/config.example.yaml config/config.yaml`), then set all paths and
+parameters in `config/config.yaml`. Per sample the pipeline needs:
 
 - the classifier's per-read output + report (Kraken2 `.kraken` / `.kreport`);
 - the QC'd paired FASTQs (`{sample}_R1.fastq.gz` / `_R2.fastq.gz`);

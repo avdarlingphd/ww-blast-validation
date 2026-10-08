@@ -31,6 +31,11 @@ seqtk:        /n/holylabs/hhealy_lab/Lab/avdarling_conda_envs/ww-blast-validatio
 # in PROVENANCE.txt. To use a newer nt later, change the date here and re-run.
 db:           /n/netscratch/informatics/Everyone/external_repos/blast/nt/2026_09/nt
 
+# ---- species-complex crosswalk (OPTIONAL; adds complex-level columns alongside species-level) ----
+# PROVISIONAL placeholder — standard-taxonomy complexes. REPLACE with the real RPIP panel v1 and/or
+# YNHH clinical complex scheme once known (keep separate files + swap this path to compare). Blank = off.
+complex_crosswalk: resources/complex_crosswalk.example.csv
+
 # ---- params (v2 refinements) ----
 max_target_seqs: 100     # was 20; more hits so the true organism is not crowded out
 max_reads: 500           # seqtk subsample cap per read set

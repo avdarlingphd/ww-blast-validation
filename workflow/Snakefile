@@ -132,6 +132,8 @@ rule classify:
         blastn          = config["blastn"],
         db              = config["db"],
         src             = SRC,
+        complex_arg     = ("--complex_crosswalk " + config["complex_crosswalk"]) if config.get("complex_crosswalk") else "",
+        complex_path    = config.get("complex_crosswalk") or "(none)",
     shell:
         # 1) build the report, then 2) stamp provenance so every report traces to the exact code,
         #    settings, and reference DB that produced it (reproducible for re-runs and other projects).
@@ -139,7 +141,7 @@ rule classify:
         {params.python} workflow/scripts/false_positive_detection.py \
             --blast_dir {params.blast_dir} --taxid_list {params.taxid_list} \
             --taxid_names {params.taxid_names} --output {output.report} \
-            --threshold {params.threshold} --min_match_reads {params.min_match_reads}
+            --threshold {params.threshold} --min_match_reads {params.min_match_reads} {params.complex_arg}
         (
           echo "# ww-blast-validation run provenance"
           echo "date_utc:         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -156,6 +158,9 @@ rule classify:
           echo "## blast database (reference version)"
           echo "db_path: {params.db}"
           "$(dirname {params.blastn})/blastdbcmd" -db {params.db} -info 2>&1 || echo "blastdbcmd -info failed"
+          echo
+          echo "## complex crosswalk"
+          echo "complex_crosswalk: {params.complex_path}"
         ) > {output.prov}
         cp config/config.yaml "$(dirname {output.report})/config.snapshot.yaml"
         echo "provenance -> {output.prov}"
