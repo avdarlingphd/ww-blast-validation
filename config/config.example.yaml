@@ -42,3 +42,7 @@ max_target_seqs: 100     # BLAST -max_target_seqs; enough hits that the true org
 max_reads: 500           # seqtk subsample cap per read set
 threshold: 80            # min avg pct_match (top-hit-by-bitscore) to call TRUE_POSITIVE
 min_match_reads: 3       # require >2 matching reads per set for TRUE_POSITIVE
+
+# optional matching modes (default off = species-level single-best-hit)
+tie_aware: false                 # a read counts if the target is among its tied-best (max-bitscore) hits
+uncultured_uninformative: false  # drop uncultured-best non-match reads from the denominator

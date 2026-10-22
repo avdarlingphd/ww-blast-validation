@@ -144,6 +144,50 @@ def test_complex_rescues_species_split():
     assert fp.classify(cx, None)[0] == "TRUE_POSITIVE"
 
 
+# ---- tie-aware matching + uncultured-uninformative --------------------------
+def _multi_df(reads):
+    """reads = list of (qseqid, [(organism, bitscore), ...]) -> a per-read-set DataFrame."""
+    rows = []
+    for q, hits in reads:
+        for org, bs in hits:
+            rows.append({"qseqid": q, "sscinames": "N/A", "pident": 99.0, "length": 150,
+                         "evalue": 0.0, "bitscore": float(bs), "stitle": org, "hit_organism": org})
+    return pd.DataFrame(rows)
+
+def test_tie_aware_counts_tied_target():
+    # one read: target ties a sibling at the top score -> tie-aware counts it
+    df = _multi_df([("r", [("Klebsiella pneumoniae", 200), ("Klebsiella variicola", 200)])])
+    a = fp.analyze_reads(df, "Klebsiella variicola", tie_aware=True)
+    assert a["n_match"] == 1 and a["pct_match"] == 100.0
+
+def test_tie_aware_excludes_strictly_better_other():
+    # a different organism is strictly best -> target is NOT a best hit -> not counted
+    df = _multi_df([("r", [("Pseudomonas aeruginosa", 205), ("Klebsiella variicola", 160)])])
+    a = fp.analyze_reads(df, "Klebsiella variicola", tie_aware=True)
+    assert a["n_match"] == 0
+
+def test_tie_aware_variicola_example_80():
+    # the K. variicola worked example: 4/5 reads have variicola among tied-best -> 80% -> TRUE
+    reads = [("r1", [("Klebsiella pneumoniae", 200), ("Klebsiella variicola", 200)]),
+             ("r2", [("Klebsiella variicola", 200), ("Klebsiella pneumoniae", 198)]),
+             ("r3", [("Klebsiella pneumoniae", 200), ("Klebsiella variicola", 200)]),
+             ("r4", [("Klebsiella variicola", 200), ("Klebsiella pneumoniae", 200)]),
+             ("r5", [("Pseudomonas aeruginosa", 205), ("Klebsiella variicola", 160)])]
+    df = _multi_df(reads)
+    a = fp.analyze_reads(df, "Klebsiella variicola", tie_aware=True)
+    assert a["n_match"] == 4 and a["pct_match"] == 80.0
+    assert fp.classify(a, None)[0] == "TRUE_POSITIVE"
+
+def test_uncultured_uninformative_excludes_from_denominator():
+    # 2 reads match the target, 2 best-hit an uncultured entry
+    df = _multi_df([("m1", [("Escherichia coli", 200)]), ("m2", [("Escherichia coli", 200)]),
+                    ("u1", [("uncultured bacterium", 200)]), ("u2", [("uncultured bacterium", 200)])])
+    default = fp.analyze_reads(df, "Escherichia coli")
+    assert default["pct_match"] == 50.0                     # uncultured reads count as non-match
+    uninf = fp.analyze_reads(df, "Escherichia coli", uncultured_uninformative=True)
+    assert uninf["pct_match"] == 100.0                      # uncultured reads dropped from denominator
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

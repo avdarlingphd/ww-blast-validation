@@ -62,9 +62,11 @@ advisor discussions, and for continuity). Dated as decisions are made.
   best-hit a **different lineage** entirely. The complex-level scoring handles the former.
 
 ## Open / to build
-- [ ] Implement **tie-aware matching** option; run on the saved per-read TSVs (free, no re-BLAST); report
-      how many detections move and which organisms (expect the Klebsiella/Enterobacter/Acinetobacter siblings).
-- [ ] Implement **uncultured-uninformative** option; test the same way.
+- [x] Implement **tie-aware matching** option (`--tie_aware` / `tie_aware: true`). DONE (v2.3).
+- [x] Implement **uncultured-uninformative** option (`--uncultured_uninformative` / config). DONE (v2.3).
+- [ ] **Run the before/after** on the saved per-read TSVs (free, no re-BLAST): how many detections move,
+      which organisms (expect Klebsiella/Enterobacter/Acinetobacter siblings), and how many moved ones have
+      thin read support — then revisit the `min_match_reads > 2` depth rule with that evidence.
 - [ ] **Clade-level capture:** add genus/complex targets, re-extract + re-BLAST, to validate reads Kraken
       parked at a higher clade (rescues NO_DATA/ambiguous species like *Shigella boydii*). Separate re-run.
 - [ ] Replace the **provisional** complex crosswalk with the real **RPIP panel v1** and **YNHH clinical**

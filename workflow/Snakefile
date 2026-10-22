@@ -134,6 +134,10 @@ rule classify:
         src             = SRC,
         complex_arg     = ("--complex_crosswalk " + config["complex_crosswalk"]) if config.get("complex_crosswalk") else "",
         complex_path    = config.get("complex_crosswalk") or "(none)",
+        tie_arg         = "--tie_aware" if config.get("tie_aware") else "",
+        uninf_arg       = "--uncultured_uninformative" if config.get("uncultured_uninformative") else "",
+        modes           = (("tie_aware " if config.get("tie_aware") else "")
+                           + ("uncultured_uninformative" if config.get("uncultured_uninformative") else "")).strip() or "default (single best-hit)",
     shell:
         # 1) build the report, then 2) stamp provenance so every report traces to the exact code,
         #    settings, and reference DB that produced it (reproducible for re-runs and other projects).
@@ -141,7 +145,7 @@ rule classify:
         {params.python} workflow/scripts/false_positive_detection.py \
             --blast_dir {params.blast_dir} --taxid_list {params.taxid_list} \
             --taxid_names {params.taxid_names} --output {output.report} \
-            --threshold {params.threshold} --min_match_reads {params.min_match_reads} {params.complex_arg}
+            --threshold {params.threshold} --min_match_reads {params.min_match_reads} {params.complex_arg} {params.tie_arg} {params.uninf_arg}
         (
           echo "# ww-blast-validation run provenance"
           echo "date_utc:         $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -161,6 +165,7 @@ rule classify:
           echo
           echo "## complex crosswalk"
           echo "complex_crosswalk: {params.complex_path}"
+          echo "matching_modes:    {params.modes}"
         ) > {output.prov}
         cp config/config.yaml "$(dirname {output.report})/config.snapshot.yaml"
         echo "provenance -> {output.prov}"

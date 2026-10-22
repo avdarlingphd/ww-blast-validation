@@ -128,26 +128,51 @@ def make_complex_matcher(members):
         return False
     return mf
 
-def analyze_reads(df: pd.DataFrame, expected: str, match_fn=None) -> dict:
+def analyze_reads(df: pd.DataFrame, expected: str, match_fn=None,
+                  tie_aware=False, uncultured_uninformative=False) -> dict:
     """Summarise one read set (the hits for one taxid + one read direction). df has COLS plus a
     numeric pident/bitscore and a hit_organism column (added by load_sample).
-    match_fn(hit_organism)->bool decides what counts as a match; default = species-level
-    organism_matches(o, expected). Pass a complex matcher to score at the complex level instead."""
+
+    match_fn(hit_organism)->bool decides what counts as a match (default = species-level
+      organism_matches(o, expected); pass a complex matcher for complex-level scoring).
+    tie_aware: a read counts as a match if the target reaches the read's MAXIMUM bitscore (i.e. the
+      target is among the read's tied-best hits), instead of only the single arbitrary #1 hit. This
+      stops the database over-representing a sibling species from winning the tie.
+    uncultured_uninformative: reads whose best hit is uncultured/environmental AND not a target match
+      are dropped from the denominator (treated as uninformative) rather than counted as non-matches.
+    """
     if df is None or df.empty:
         return {"status": "empty"}
     mf = match_fn if match_fn is not None else (lambda o: organism_matches(o, expected))
     n_reads = df["qseqid"].nunique()
-    # TOP HIT PER READ = highest bitscore (ties -> first).
-    top = (df.sort_values("bitscore", ascending=False, na_position="last")
-             .groupby("qseqid", sort=False).first().reset_index())
-    n_match = int(top["hit_organism"].apply(mf).sum())
-    pct_match = round(n_match / n_reads * 100, 1) if n_reads else 0.0
-    counts = Counter(top["hit_organism"]).most_common()   # rank by TOP-hit read counts
-    expected_rank = next((i for i, (o, _) in enumerate(counts, 1) if mf(o)), None)
-    n_uncult = int(top["hit_organism"].apply(is_uncultured).sum())
+    # single best hit per read (ties -> first after bitscore sort) = the "best" (non-tie-aware) view
+    best = (df.sort_values("bitscore", ascending=False, na_position="last")
+              .groupby("qseqid", sort=False).first())
+    best_org = best["hit_organism"]
+    read_uncult = best_org.map(is_uncultured)
+
+    if tie_aware:
+        # per read: does the target reach the read's max bitscore (any tied-best hit matches)?
+        mb = df.groupby("qseqid")["bitscore"].transform("max")
+        top = df[df["bitscore"] >= mb - 1e-6].assign(_m=lambda d: d["hit_organism"].map(mf))
+        read_match = top.groupby("qseqid")["_m"].any().reindex(best.index).fillna(False)
+        # rank/display: how many reads have each organism among their tied-best hits
+        memb = top.groupby("hit_organism")["qseqid"].nunique().sort_values(ascending=False)
+        counts = list(memb.items())
+    else:
+        read_match = best_org.map(mf)
+        counts = list(best_org.value_counts().items())
+
+    n_match = int(read_match.sum())
+    n_uncult = int(read_uncult.sum())
+    denom = n_reads
+    if uncultured_uninformative:
+        denom -= int((read_uncult & (~read_match)).sum())   # drop uncultured non-match reads
+    pct_match = round(n_match / denom * 100, 1) if denom else 0.0
     pct_uncult = round(n_uncult / n_reads * 100, 1) if n_reads else 0.0
+    expected_rank = next((i for i, (o, _) in enumerate(counts, 1) if mf(o)), None)
+    top_orgs = "; ".join(f"{o}({int(c)})" for o, c in counts[:5])
     mean_pident = round(df["pident"].mean(), 2) if not df["pident"].isna().all() else None
-    top_orgs = "; ".join(f"{o}({c})" for o, c in counts[:5])
     return {"status": "complete", "n_reads": n_reads, "n_match": n_match, "pct_match": pct_match,
             "pct_uncultured": pct_uncult, "expected_rank": expected_rank,
             "mean_pident": mean_pident, "top_organisms": top_orgs}
@@ -211,6 +236,10 @@ def main():
     ap.add_argument("--min_match_reads", type=int, default=3)
     ap.add_argument("--complex_crosswalk", default=None,
                     help="optional CSV (complex_name,member_organism); adds complex-level columns")
+    ap.add_argument("--tie_aware", action="store_true",
+                    help="count a read as a match if the target is among its tied-best (max-bitscore) hits")
+    ap.add_argument("--uncultured_uninformative", action="store_true",
+                    help="drop reads whose best hit is uncultured/environmental (and not a match) from the denominator")
     a = ap.parse_args()
 
     taxid_to_name = {}
@@ -234,13 +263,14 @@ def main():
             else:
                 sub = df[df["taxid"] == taxid]
                 sub_r1, sub_r2 = sub[sub["read"] == "R1"], sub[sub["read"] == "R2"]
-                r1 = analyze_reads(sub_r1, expected)
-                r2 = analyze_reads(sub_r2, expected)
+                opts = dict(tie_aware=a.tie_aware, uncultured_uninformative=a.uncultured_uninformative)
+                r1 = analyze_reads(sub_r1, expected, **opts)
+                r2 = analyze_reads(sub_r2, expected, **opts)
                 label, avg_pct, avg_unc, _ = classify(r1, r2, a.threshold, a.min_match_reads)
                 if cx:                                       # also score at the complex level
                     mf = make_complex_matcher(complex_members[cx])
-                    c1 = analyze_reads(sub_r1, expected, match_fn=mf)
-                    c2 = analyze_reads(sub_r2, expected, match_fn=mf)
+                    c1 = analyze_reads(sub_r1, expected, match_fn=mf, **opts)
+                    c2 = analyze_reads(sub_r2, expected, match_fn=mf, **opts)
                     cx_label, cx_pct, _, _ = classify(c1, c2, a.threshold, a.min_match_reads)
                 else:
                     cx_label, cx_pct = "", None

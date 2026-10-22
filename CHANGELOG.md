@@ -3,6 +3,16 @@
 Version history for the pipeline. The README describes current behavior; this file records how it
 got there.
 
+## v2.3
+- Optional **tie-aware matching** (`tie_aware` / `--tie_aware`): a read counts as a match if the target
+  is among its tied-best (max-bitscore) hits, instead of only the single arbitrary top hit. Removes the
+  database-over-representation bias that lets a more-deposited sibling win a tie (e.g. *K. pneumoniae* over
+  a true *K. variicola*). Reads that match a different organism strictly better are still excluded.
+- Optional **uncultured-as-uninformative** (`uncultured_uninformative` / flag): reads whose best hit is an
+  uncultured/environmental entry (and not a target match) are dropped from the denominator rather than
+  counted as non-matches. UNCULTURED_DOMINANT remains as a separate flag.
+- Both default **off** (backward-compatible); recorded in PROVENANCE.txt (`matching_modes`). 4 new unit tests.
+
 ## v2.2
 - Optional **species-complex scoring**: a user-supplied `complex_crosswalk` (complex_name, member_organism)
   adds complex-level columns (`complex_name`, `complex_classification`, `avg_complex_pct_match`) alongside
