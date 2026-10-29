@@ -29,35 +29,40 @@ def main():
     t2n = dict(zip(names["taxid"].astype(str), names["organism_name"]))
     pairs = pd.read_csv(a.taxid_list, sep="\t", header=None, names=["sample", "taxid"], dtype=str).dropna()
 
+    MODES = {"class_default": {}, "class_tie": {"tie_aware": True},
+             "class_uninf": {"uncultured_uninformative": True},
+             "class_both": {"tie_aware": True, "uncultured_uninformative": True}}
     rows = []
     for i, (sample, grp) in enumerate(pairs.groupby("sample", sort=True), 1):
         df = fp.load_sample(os.path.join(a.blast_dir, f"{sample}_blast_results.tsv"))
         for taxid in grp["taxid"].astype(str):
             exp = t2n.get(taxid, f"taxid_{taxid}")
+            rec = {"sample": sample, "taxid": taxid, "expected_organism": exp}
             if df is None:
-                rows.append({"sample": sample, "taxid": taxid, "expected_organism": exp,
-                             "class_default": "BLAST_NOT_RUN", "class_tie": "BLAST_NOT_RUN"})
-                continue
-            sub = df[df["taxid"] == taxid]
-            r1, r2 = sub[sub["read"] == "R1"], sub[sub["read"] == "R2"]
-            def label(**kw):
-                return fp.classify(fp.analyze_reads(r1, exp, **kw), fp.analyze_reads(r2, exp, **kw),
-                                   a.threshold, a.min_match_reads)[0]
-            rows.append({"sample": sample, "taxid": taxid, "expected_organism": exp,
-                         "class_default": label(), "class_tie": label(tie_aware=True)})
+                for col in MODES:
+                    rec[col] = "BLAST_NOT_RUN"
+            else:
+                sub = df[df["taxid"] == taxid]
+                r1, r2 = sub[sub["read"] == "R1"], sub[sub["read"] == "R2"]
+                for col, kw in MODES.items():
+                    rec[col] = fp.classify(fp.analyze_reads(r1, exp, **kw),
+                                           fp.analyze_reads(r2, exp, **kw),
+                                           a.threshold, a.min_match_reads)[0]
+            rows.append(rec)
         if i % 25 == 0:
             print(f"  ...{i} samples", flush=True)
 
     out = pd.DataFrame(rows)
     out.to_csv(a.output, sep="\t", index=False)
-    print("\n=== default ===\n" + out["class_default"].value_counts().to_string())
-    print("\n=== tie_aware ===\n" + out["class_tie"].value_counts().to_string())
-    mv = out[out["class_default"] != out["class_tie"]]
-    print(f"\n=== changed: {len(mv)} detections ===")
-    print(pd.crosstab(mv["class_default"], mv["class_tie"]).to_string())
-    up = mv[(mv["class_default"].isin(["UNCERTAIN", "FALSE_POSITIVE"])) & (mv["class_tie"] == "TRUE_POSITIVE")]
-    print("\n=== organisms rescued UNCERTAIN/FALSE -> TRUE_POSITIVE ===\n"
-          + up["expected_organism"].value_counts().head(25).to_string())
+    print("\n=== counts by mode ===")
+    print(pd.DataFrame({c: out[c].value_counts() for c in MODES}).fillna(0).astype(int).to_string())
+    for col, name in [("class_tie", "tie_aware"), ("class_both", "both")]:
+        mv = out[out["class_default"] != out[col]]
+        print(f"\n=== default -> {name}: {len(mv)} changed ===")
+        print(pd.crosstab(mv["class_default"], mv[col]).to_string())
+        up = mv[(mv["class_default"].isin(["UNCERTAIN", "FALSE_POSITIVE"])) & (mv[col] == "TRUE_POSITIVE")]
+        print(f"  rescued UNCERTAIN/FALSE -> TRUE (top):\n"
+              + up["expected_organism"].value_counts().head(15).to_string())
     print(f"\nwrote {a.output}")
 
 if __name__ == "__main__":
