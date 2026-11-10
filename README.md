@@ -20,6 +20,11 @@ to that taxid, BLASTs them against a nucleotide database (NCBI `nt`), and labels
 This removes taxonomic-classifier (Kraken2, or later Bowtie2) false positives from your detection
 tables before downstream analysis.
 
+> **Current method (v4):** read-level validation matched by NCBI taxid, with a synonym table and a
+> same-complex sibling label. See [`docs/DECISION_POINTS.md`](docs/DECISION_POINTS.md) (every choice and why),
+> [`docs/FINAL_SPEC_v4.md`](docs/FINAL_SPEC_v4.md), the figure `docs/master_methods_figure.png`, and the
+> CHANGELOG. The per-detection classification below is still produced alongside it.
+
 ## Pipeline
 
 ```
