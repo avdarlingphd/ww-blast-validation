@@ -59,9 +59,9 @@ for i,row in enumerate(data):
     for j,val in enumerate(row):
         ax.add_patch(Rectangle((cx,cy-rh),cw[j],rh,facecolor="#CDEAD2" if best else "white",edgecolor="#999",lw=0.8)); ax.text(cx+cw[j]/2,cy-rh/2,val,ha="center",va="center",fontsize=8.4,fontweight="bold" if best else "normal"); cx+=cw[j]
 ax.text(12.35,15.5,"best hit =\nhighest\nbitscore",ha="left",va="center",fontsize=8.3,color="#333")
-ax.text(10.6,14.5,"Target = any hit whose taxid rolls up to the target species\n(so renames such as Raoultella → Klebsiella cannot break the match)",
+ax.text(10.6,14.5,"Target = any hit whose taxid rolls up to the target species (renames such as\nRaoultella → Klebsiella cannot break it); a hit with no taxid is matched by the synonym table",
         ha="center",va="center",fontsize=8.0,color="#333")
-ax.text(10.6,14.02,"Near-tie:  target within the margin (2%; 5%, 10% tested) of the top named score",ha="center",fontsize=8.3,fontweight="bold",color=GRN)
+ax.text(10.6,14.02,"Near-tie:  target within the margin of the top named score (2, 5 or 10%: pending)",ha="center",fontsize=8.3,fontweight="bold",color=GRN)
 rb(7.3,13.78,2.75,0.4,CHO); ax.text(8.68,13.58,"V. cholerae (141)  target",ha="center",va="center",fontsize=8.0)
 ax.text(10.35,13.58,"within 2% of",ha="center",va="center",fontsize=8.3,fontweight="bold",color="#333")
 rb(11.3,13.78,2.75,0.4,"#FBF0D8"); ax.text(12.68,13.58,"V. mimicus (143)  top named",ha="center",va="center",fontsize=8.0)
@@ -95,10 +95,11 @@ arrow(cx,d3-h3/2,cx,mis,"No",lx=0.32,head=False); arrow(cx,mis,LX,mis)
 ax.add_patch(FancyBboxPatch((0.6,3.85),13.3,1.75,boxstyle="round,pad=0.03,rounding_size=0.08",lw=1.3,edgecolor="#5b4a7a",facecolor="#F3EFF8"))
 ax.text(0.9,5.36,"Re-aggregate per (sample, taxon):",fontsize=10.6,fontweight="bold",color="#4a3a66")
 for yy,txt in [
- (5.05,"validated fraction  =  CONFIRMED / all reads with a BLAST hit  (incl. EXCLUDED, EXCLUDED_COMPLEX)     (≤ 500-read subsample)"),
- (4.76,"corrected abundance  =  validated fraction  ×  reads_clade        (full Kraken clade read count)"),
- (4.47,"relative abundance  =  corrected abundance  /  total QC'd + dehosted reads        (sample library size)"),
- (4.18,"supported detection  if  CONFIRMED reads > 2"),
+ (5.07,"validated fraction  =  CONFIRMED / all reads with a BLAST hit  (incl. EXCLUDED, EXCLUDED_COMPLEX)     (≤ 500-read subsample)"),
+ (4.82,"     alternative (choice pending):  CONFIRMED / (CONFIRMED + MISASSIGNED)   (EXCLUDED reads do not count against the taxon)"),
+ (4.57,"corrected abundance  =  validated fraction  ×  reads_clade        (full Kraken clade read count)"),
+ (4.32,"relative abundance  =  corrected abundance  /  total QC'd + dehosted reads        (sample library size)"),
+ (4.07,"supported detection  if  CONFIRMED reads > 2"),
 ]:
     ax.text(1.05,yy,txt,fontsize=9.2,color="#222")
 
