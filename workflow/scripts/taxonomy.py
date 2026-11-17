@@ -17,7 +17,9 @@ Definitions:
                  i.e. NCBI's own complex (e.g. 3390273 Klebsiella pneumoniae complex). None if not in one.
   is_uncultured(t)  name is uncultured/unclassified/metagenome/... or any ancestor is "environmental samples".
   is_noncellular(t) not under "cellular organisms" (131567: vectors, plasmids, phages, other sequences) or under
-                    "unclassified Bacteria" (2323: hits named just "bacterium"). Decision #17: not a competing organism.
+                    the node NAMED "unclassified Bacteria" (49928 in taxdmp 2026-09-01; matched by name because
+                    NCBI renumbers: 2323 is now "Bacteria incertae sedis"), i.e. hits named just "bacterium".
+                    Decision #17: not a competing organism.
 """
 import re
 import pandas as pd
@@ -105,7 +107,7 @@ class Taxonomy:
 def _noncellular(self, t):
     if t not in self._nc:
         lin = self.lineage(t)
-        self._nc[t] = (131567 not in lin) or (2323 in lin)
+        self._nc[t] = (131567 not in lin) or any(self.name.get(a) == "unclassified Bacteria" for a in lin)
     return self._nc[t]
 
 
