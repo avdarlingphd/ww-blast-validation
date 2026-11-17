@@ -1,4 +1,4 @@
-# BLAST read-level validation: decision points (v4, 2026-11-09; updated 2026-11-17)
+# BLAST read-level validation: decision points (v4, 2026-11-09; updated 2026-11-17, final rules)
 
 One page for the advisor meeting. Each row is a choice in the method, the options considered, what we chose
 and why. Methods figure: `docs/master_methods_figure.png`. Full spec: `docs/FINAL_SPEC_v4.md`.
@@ -21,20 +21,20 @@ and why. Methods figure: `docs/master_methods_figure.png`. Full spec: `docs/FINA
 | 12 | Minimum confirmed reads per detection | in the validation vs downstream; 1 vs 3 | **Not part of the validation.** The report gives CONFIRMED counts; a minimum (default 3) is an option in the Time-Series R script that can be switched off (Amanda 2026-11-17). A relative-abundance threshold instead was considered and not adopted. | Keeps validation strictly read by read. |
 | 13 | What feeds the Time-Series paper | v2.1 TRUE_POSITIVE rule vs read-level | **Read-level supported detections + corrected abundance** | Applied only after Amanda reviews old vs new per taxon. |
 | 14 | Near-tie margin | 2% / 5% / 10% (NAO uses 10%) | **2%** (Amanda, 2026-11-16) | Strictest of the three; on the corrected v4 run, 2% vs 10% changes supported detections by 0.7% (7,270 vs 7,324). |
-| 19 | Plasmid hits | count as their host species vs ignore | **Ignore any hit whose title says "plasmid"** (Amanda 2026-11-17) | NCBI files plasmid sequences under the host's taxid, and plasmids move between species; a confirmed C. difficile read's best hit was a C. difficile plasmid. NCBI taxonomy cannot flag these, so this uses the sequence title. |
+| 19 | Plasmid hits | count as their host species vs ignore | **Plasmid hits do not score** (Amanda 2026-11-17): any hit titled "plasmid" is dropped; a read that is not CONFIRMED on its other hits and has a plasmid hit within 2% of its top hit is **EXCLUDED_PLASMID** (neither for nor against). | NCBI files plasmid sequences under the host's taxid, and plasmids move between species; a confirmed C. difficile read's best hit was a C. difficile plasmid. NCBI taxonomy cannot flag these, so this uses the sequence title. A first version only dropped the hits, which scored plasmid reads against the target via other species' chromosomes carrying the same mobile gene (MISASSIGNED 296,612); EXCLUDED_PLASMID fixes that (MISASSIGNED 33,699). Effect: 645,089 reads (23%) are EXCLUDED_PLASMID; detections with >= 3 CONFIRMED 7,270 -> 6,895, losses in S. enterica (-51; 49% of its reads plasmid-borne), A. nosocomialis (-43), C. perfringens (-33), A. sobria (113 -> 0; 100% plasmid reads). The 90% identity floor alone changes no detection. |
+| 16 | Minimum target alignment length | none / 50 / 60 / 75 / 100 bp (reads are 150 bp) | **60 bp** (proposed 2026-11-17, Amanda to confirm; code default); a read that would be CONFIRMED on a shorter alignment is EXCLUDED_SHORT (neither for nor against) | Below 60 bp, CONFIRMED reads tie with 3-5x more species (V. cholerae 5.0 vs 1.7 species within 2%; C. perfringens 8.4 vs 1.6; S. enterica 7.9 vs 3.9), so a short alignment is not species evidence. 100 bp cost real taxa (V. cholerae 104 -> 52). At 60 bp: all detections 6,895 -> 6,649; losses mostly rare / implausible taxa (B. mallei 83 -> 32, B. pseudomallei 101 -> 69, P. multocida 21 -> 0, B. pertussis 28 -> 12) plus S. enterica 167 -> 148, C. perfringens 66 -> 49, V. cholerae 104 -> 92; C. difficile and E. faecium essentially unchanged. |
 | 17 | Hits that are not organisms | count them vs ignore them like uncultured | **Ignore** vectors, plasmids, phages and hits filed under "unclassified Bacteria" (named just "bacterium") (Amanda, 2026-11-16) | They are not a competing organism: C. difficile reads tied a phage (Caudoviricetes) on 81% and an "unidentified plasmid" on 75% of confirmed reads; E. faecium reads tied cloning vectors on 85%. Defined by NCBI taxonomy (not under "cellular organisms"), not a name list. |
 
 ## B. Still open
 
 | # | Decision point | Options | Status |
 |---|---|---|---|
-| 20 | 10% rule (advisor): target must be >= 10% of a read's kept named hits (up to 100), else EXCLUDED_NONSPECIFIC | on / off | Built as a switch (off by default); the rerun reports both. Counted over named organism hits only, after dropping uncultured, non-organism and plasmid hits, which limits the bias from species with many genomes in nt. Amanda unsure; decide on the numbers. |
-| 16 | Minimum target alignment length | none / 100 bp (reads are 150 bp) | Off by default; the rerun reports 0 and 100 bp. Advisor not keen. A read that would be CONFIRMED on a shorter alignment becomes EXCLUDED_SHORT (neither for nor against). Motivation: B. mallei confirmed reads align over a median 55 bp (all under 100 bp), mostly 16S/conserved fragments shared with unrelated genera. Trade-off at 100 bp: B. mallei 83 -> 0 supported, but V. cholerae 104 -> 52. |
-| 15 | Denominator of the validated fraction | CONFIRMED / all reads with a hit vs CONFIRMED / (CONFIRMED + MISASSIGNED) | Both are computed. Only the second lets EXCLUDED / EXCLUDED_COMPLEX reads stop counting against the taxon. |
+| 15 | Denominator of the validated fraction | CONFIRMED / all reads with a hit vs CONFIRMED / (CONFIRMED + MISASSIGNED) | Both are computed. With the first, corrected abundance = chromosome-confirmed share x Kraken reads, so plasmid / short / complex reads leave the abundance (consistent with #19; plasmid copy number no longer inflates abundance; E. faecium fraction 0.19). With the second, excluded reads are assumed right in the same proportion as the informative reads, so plasmid reads stay in the abundance. Leaning first (Amanda); Hannah to confirm. |
 
 ### Considered and not adopted
 | # | Decision point | Why not |
 |---|---|---|
+| 20 | 10% rule (advisor): target >= 10% of a read's kept named hits (up to 100), else EXCLUDED_NONSPECIFIC | Measures how many genomes each species has in nt, not read specificity: with 100 hits kept, equally scoring genomes fill the list from the most-sequenced species, so a gene Salmonella shares with E. coli / Klebsiella fails even when Salmonella ties for best (S. enterica -49 detections). It barely touches B. mallei (83 -> 70). Kept as a switch (--min_target_frac), off. |
 | 18 | Target must beat every species from another genus (a cross-genus tie = uninformative) | Too stringent for real taxa: 61% of Salmonella confirmed reads tie E. coli / Klebsiella / Enterobacter (shared Enterobacterales DNA); with #16 Salmonella would fall from 218 to 81 supported detections. Adds little beyond #16 for B. mallei / C. perfringens / V. cholerae. |
 
 ## C. Quality checks and what they caught
@@ -50,6 +50,6 @@ Each check below found something; each is fixed and covered by tests (40 tests p
 | Pilot rerun, sample GKWWBAA00014 (39 detections, 19,605 reads) | Every hit now has an NCBI name and taxid. Old BLAST + synonym table and new BLAST + taxids give **identical CONFIRMED counts** at 2/5/10% (19,348 / 19,418 / 19,463). MISASSIGNED at 2%: 1,832 before the fix, 226 after (+15 EXCLUDED_COMPLEX). | Two independent routes agree, so the fix is confirmed. |
 
 ## D. Next steps
-1. Re-score the v4 BLAST output (no new BLAST): 2%, %id >= 90, #17 and #19 on; report the 10% rule and the 100 bp rule on vs off.
-2. Decide #20 and #16 from those numbers; Hannah confirms #14 and picks #15.
+1. DONE 2026-11-17: re-scored (no new BLAST) with 2%, %id >= 90, #16 at 60 bp, #17, #19; these are now the code defaults.
+2. Hannah confirms #14 and #15. B. mallei: report at genus / B. pseudomallei group level or flag as not validatable (confirmed reads tie Rubrivivax, Streptomyces, cyanobacteria and plants).
 3. Old vs new per taxon on the final rule, then wire it into the Time-Series filter (#13) with the minimum-confirmed-reads option (#12).
