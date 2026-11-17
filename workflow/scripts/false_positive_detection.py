@@ -476,14 +476,15 @@ def main():
                          "read-level validation matches by NCBI taxid + flags same-complex siblings")
     ap.add_argument("--clade_counts", default=None,
                     help="optional TSV (sample, taxid, reads_clade, total_reads) -> adds corrected/relative abundance")
-    ap.add_argument("--min_aln_len", type=float, default=0,
-                    help="v4 decision #16: target alignment must be >= this many bp to CONFIRM (else EXCLUDED_SHORT)")
-    ap.add_argument("--ignore_noncellular", action="store_true",
-                    help="v4 decision #17: ignore vector / plasmid / phage / 'bacterium' hits like uncultured ones")
-    ap.add_argument("--ignore_plasmid", action="store_true",
-                    help="v4 decision #19: ignore any hit whose title says 'plasmid'")
+    ap.add_argument("--min_aln_len", type=float, default=60,
+                    help="v4 decision #16: target alignment must be >= this many bp to CONFIRM (else EXCLUDED_SHORT; "
+                         "default 60 = 40%% of a 150 bp read; 0 turns it off)")
+    ap.add_argument("--ignore_noncellular", action=argparse.BooleanOptionalAction, default=True,
+                    help="v4 decision #17 (default on): ignore vector / plasmid / phage / 'bacterium' hits like uncultured ones")
+    ap.add_argument("--ignore_plasmid", action=argparse.BooleanOptionalAction, default=True,
+                    help="v4 decision #19 (default on): hits titled 'plasmid' do not score; plasmid-borne reads are EXCLUDED_PLASMID")
     ap.add_argument("--min_target_frac", type=float, default=0,
-                    help="10%% rule (under evaluation): target must be >= this share of a read's kept named hits")
+                    help="10%% rule (not adopted, off by default): target must be >= this share of a read's kept named hits")
     a = ap.parse_args()
 
     taxid_to_name = {}
