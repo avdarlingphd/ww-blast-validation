@@ -3,10 +3,12 @@
 false-positive validation pipeline (build -> score -> validate reads -> re-aggregate).
 Read-level validation v4 (workflow/scripts/false_positive_detection.py --taxonomy; spec docs/FINAL_SPEC_v4.md):
 hits are matched to the target by NCBI taxid rolled up to species (names + synonym table only as a fallback).
-Each read is EXCLUDED (no named hit), CONFIRMED (target within the near-tie margin of the top named bitscore,
-%id>=80; uncultured ignored), EXCLUDED_COMPLEX (every top named hit is a sibling in the target's NCBI complex),
-or MISASSIGNED. Per (sample, taxon): validated fraction = CONFIRMED / all reads with a hit; corrected abundance =
-validated fraction x full Kraken count; supported if CONFIRMED > 2.
+Ignored hits: uncultured, non-organism (vector / phage / unidentified plasmid / "bacterium", #17) and any hit
+titled "plasmid" (#19). Each read is EXCLUDED (no named hit left), CONFIRMED (target within 2% of the top named
+bitscore, %id >= 90), EXCLUDED_COMPLEX (every top named hit is a sibling in the target's NCBI complex), or
+MISASSIGNED. The 10% rule (target >= 10% of kept named hits, else EXCLUDED_NONSPECIFIC) is drawn as under
+evaluation. Per (sample, taxon): validated fraction = CONFIRMED / all reads with a hit; corrected abundance =
+validated fraction x full Kraken count. No 'supported' call: a minimum CONFIRMED count is an R-script option.
 Schematic/illustrative numbers.
 """
 import matplotlib
@@ -59,9 +61,9 @@ for i,row in enumerate(data):
     for j,val in enumerate(row):
         ax.add_patch(Rectangle((cx,cy-rh),cw[j],rh,facecolor="#CDEAD2" if best else "white",edgecolor="#999",lw=0.8)); ax.text(cx+cw[j]/2,cy-rh/2,val,ha="center",va="center",fontsize=8.4,fontweight="bold" if best else "normal"); cx+=cw[j]
 ax.text(12.35,15.5,"best hit =\nhighest\nbitscore",ha="left",va="center",fontsize=8.3,color="#333")
-ax.text(10.6,14.5,"Target = any hit whose taxid rolls up to the target species (renames such as\nRaoultella → Klebsiella cannot break it); a hit with no taxid is matched by the synonym table",
+ax.text(10.6,14.55,"Target = any hit whose taxid rolls up to the target species (renames such as\nRaoultella → Klebsiella cannot break it); a hit with no taxid is matched by the synonym table.\nIgnored: uncultured, vector / phage / 'bacterium' and plasmid hits",
         ha="center",va="center",fontsize=8.0,color="#333")
-ax.text(10.6,14.02,"Near-tie:  target within the margin of the top named score (2, 5 or 10%: pending)",ha="center",fontsize=8.3,fontweight="bold",color=GRN)
+ax.text(10.6,14.02,"Near-tie:  target within 2% of the top named score,  %id ≥ 90",ha="center",fontsize=8.3,fontweight="bold",color=GRN)
 rb(7.3,13.78,2.75,0.4,CHO); ax.text(8.68,13.58,"V. cholerae (141)  target",ha="center",va="center",fontsize=8.0)
 ax.text(10.35,13.58,"within 2% of",ha="center",va="center",fontsize=8.3,fontweight="bold",color="#333")
 rb(11.3,13.78,2.75,0.4,"#FBF0D8"); ax.text(12.68,13.58,"V. mimicus (143)  top named",ha="center",va="center",fontsize=8.0)
@@ -77,11 +79,13 @@ def leaf(y,name,sub): rb(LX,y+0.5,LW,1.0,LEAF[name]); ax.text(LX+LW/2,y+0.18,nam
 d1,d2,d3=11.4,9.7,7.85; hb=1.0; h2=1.5; h3=1.3; mis=6.3
 ax.text(3.4,12.32,"each read Kraken assigned to the target taxon",ha="center",fontsize=8.8,style="italic",color="#555")
 arrow(3.4,12.1,3.4,d1+hb/2,head=True)
-dec(d1,hb,"Any hit to a NAMED organism in nt?\n(no nt hit, or uncultured-only  =  excluded)")
-dec(d2,h2,"Is a TARGET-species hit (by taxid) within the margin\nof the top NAMED bitscore?  (uncultured ignored)\nAND     %id ≥ 80%",fs=10.4)
+dec(d1,hb,"Any NAMED organism hit left after dropping uncultured,\nvector / phage / 'bacterium' and plasmid hits?",fs=10.0)
+dec(d2,h2,"Is a TARGET-species hit (by taxid) within the margin\nof the top NAMED bitscore?  (ignored hits left out)\nAND     %id ≥ 90%",fs=10.4)
 dec(d3,h3,"Are ALL top-scoring named hits sibling species\nin the target's NCBI complex?  (e.g. K. pneumoniae complex)",fs=10.0)
-leaf(d1,"EXCLUDED","no named hit\n(no nt match, or uncultured-only)")
+leaf(d1,"EXCLUDED","no named organism hit left\n(no nt match, or only ignored hits)")
 leaf(d2,"CONFIRMED","counts toward the taxon")
+ax.add_patch(FancyBboxPatch((LX,8.5),LW,0.55,boxstyle="round,pad=0.02,rounding_size=0.05",lw=1.1,edgecolor="#777",facecolor="white",linestyle=(0,(4,3))))
+ax.text(LX+LW/2,8.775,"Under evaluation (10% rule): CONFIRMED only if the target is ≥ 10% of the read's\nkept named hits (up to 100); otherwise EXCLUDED_NONSPECIFIC",ha="center",va="center",fontsize=7.6,color="#444")
 leaf(d3,"EXCLUDED_COMPLEX","a same-complex sibling wins:\nnot evidence against the taxon")
 leaf(mis,"MISASSIGNED","an organism outside the complex outscores\nthe target   (false-positive read)")
 cx=SX+SW/2
@@ -99,7 +103,7 @@ for yy,txt in [
  (4.82,"     alternative (choice pending):  CONFIRMED / (CONFIRMED + MISASSIGNED)   (EXCLUDED reads do not count against the taxon)"),
  (4.57,"corrected abundance  =  validated fraction  ×  reads_clade        (full Kraken clade read count)"),
  (4.32,"relative abundance  =  corrected abundance  /  total QC'd + dehosted reads        (sample library size)"),
- (4.07,"supported detection  if  CONFIRMED reads > 2"),
+ (4.07,"no 'supported' call here:  a minimum number of CONFIRMED reads (default 3) is an option in the Time-Series R script"),
 ]:
     ax.text(1.05,yy,txt,fontsize=9.2,color="#222")
 
@@ -123,11 +127,11 @@ for i,(org,tid,pid,bit,note,bg) in enumerate(e1rows):
     ax.text(e1hx[3]+e1hw[3]/2,cyc,bit,ha="center",va="center",fontsize=7.8)
     ax.text(e1hx[4]+e1hw[4]/2,cyc,note,ha="center",va="center",fontsize=7.3,style="italic",color="#555")
 ax.text(0.62,1.04,"Ignore uncultured.  Top NAMED hit = V. mimicus (143).",fontsize=7.9,color="#222")
-ax.text(0.62,0.76,"Target (taxid 666 = V. cholerae) scores 141: within 2% of 143,  %id ≥ 80.",fontsize=7.9,color="#222")
+ax.text(0.62,0.76,"Target (taxid 666 = V. cholerae) scores 141: within 2% of 143,  %id ≥ 90.",fontsize=7.9,color="#222")
 ax.text(0.62,0.44,"→  CONFIRMED   (counts toward V. cholerae)",fontsize=8.7,fontweight="bold",color=GRN)
 # ---- Example 2: is the (sample, taxon) supported? ----
 ax.add_patch(FancyBboxPatch((7.15,0.25),6.95,3.4,boxstyle="round,pad=0.03,rounding_size=0.08",lw=1.2,edgecolor="#5b4a7a",facecolor="#F6F4FB"))
-ax.text(7.4,3.42,"Example 2:   is (sample S12, V. cholerae) supported?",fontsize=10.2,fontweight="bold")
+ax.text(7.4,3.42,"Example 2:   one detection (sample S12, V. cholerae)",fontsize=10.2,fontweight="bold")
 for yy,txt in [
  (2.92,"reads in subsample:    CONFIRMED 418   |   MISASSIGNED 60   |   EXCLUDED 22"),
  (2.54,"validated fraction  =  418 / (418 + 60 + 22)  =  83.6%"),
@@ -135,7 +139,7 @@ for yy,txt in [
  (1.78,"corrected abundance  =  0.836 × 4,200  =  3,511 reads"),
  (1.40,"total QC'd + dehosted reads  =  18,540,000"),
  (1.02,"relative abundance  =  3,511 / 18,540,000  =  0.0189%"),
- (0.56,"supported?    418 CONFIRMED > 2   →   yes   ✓"),
+ (0.56,"R-script option (default ≥ 3 CONFIRMED):   418  →  kept   ✓"),
 ]:
     ax.text(7.4,yy,txt,fontsize=8.5,color="#222")
 

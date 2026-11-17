@@ -16,6 +16,8 @@ Definitions:
   complex_of(t)  the BROADEST "species group"/"species subgroup" ancestor of t's species below the genus,
                  i.e. NCBI's own complex (e.g. 3390273 Klebsiella pneumoniae complex). None if not in one.
   is_uncultured(t)  name is uncultured/unclassified/metagenome/... or any ancestor is "environmental samples".
+  is_noncellular(t) not under "cellular organisms" (131567: vectors, plasmids, phages, other sequences) or under
+                    "unclassified Bacteria" (2323: hits named just "bacterium"). Decision #17: not a competing organism.
 """
 import re
 import pandas as pd
@@ -36,7 +38,7 @@ class Taxonomy:
         self.parent = dict(zip(nodes["taxid"], nodes["parent"]))
         self.rank = dict(zip(nodes["taxid"], nodes["rank"]))
         self.name = dict(zip(nodes["taxid"], nodes["name"]))
-        self._lin, self._sp, self._cx, self._unc = {}, {}, {}, {}
+        self._lin, self._sp, self._cx, self._unc, self._nc = {}, {}, {}, {}, {}
 
     # ---- basics ----
     def resolve(self, t):
@@ -98,6 +100,16 @@ class Taxonomy:
             self.name.get(a, "") == "environmental samples" for a in self.lineage(t))
         self._unc[t] = u
         return u
+
+
+def _noncellular(self, t):
+    if t not in self._nc:
+        lin = self.lineage(t)
+        self._nc[t] = (131567 not in lin) or (2323 in lin)
+    return self._nc[t]
+
+
+Taxonomy.is_noncellular = _noncellular
 
 
 def parse_staxids(v):

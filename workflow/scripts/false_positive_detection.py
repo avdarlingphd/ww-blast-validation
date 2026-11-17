@@ -44,6 +44,8 @@ v4 TAXID MODE (--taxonomy TABLE; needs staxids in the BLAST outfmt): hits are ma
     MISASSIGNED       anything else (a non-complex organism wins, or the target is too far / too low-id)
   validated_fraction = CONFIRMED / all reads with a BLAST hit (EXCLUDED and EXCLUDED_COMPLEX in the
   denominator); validated_fraction_informative = CONFIRMED / (CONFIRMED + MISASSIGNED).
+  --min_aln_len (#16): a read that would be CONFIRMED on a target alignment shorter than this is EXCLUDED_SHORT.
+  --ignore_noncellular (#17): vector / plasmid / phage / "bacterium" hits are ignored like uncultured ones.
 
 Usage (called by the Snakemake classify rule):
     python false_positive_detection.py --blast_dir DIR --taxid_list TSV --taxid_names CSV
@@ -295,18 +297,28 @@ def validate_detection(sub: pd.DataFrame, expected: str, margin: float = 0.02, i
             "supported": nc >= min_confirmed}
 
 # ---- v4: taxid-based per-read validation -------------------------------------------------------------
-def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = None) -> pd.DataFrame:
+_PLASMID = re.compile(r"plasmid", re.I)
+
+
+def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = None,
+                       ignore_noncellular: bool = False, ignore_plasmid: bool = False) -> pd.DataFrame:
     """One row per read (qseqid) with the margin-independent pieces, matching by NCBI taxid:
        has_named   any non-uncultured hit with a bitscore
        has_target  a hit whose taxid descends from target_key(target_taxid)
        ratio       best target bitscore / top named bitscore
        tpid        %id of that best target hit
+       tlen        aligned length (bp) of that best target hit (decision #16)
+       tfrac       target hits / all kept named hits for the read (up to 100 hits; 10% rule, under evaluation)
+   ignore_noncellular (decision #17): vectors, unidentified plasmids, phages and "bacterium" hits are dropped
+                      like uncultured ones.
+   ignore_plasmid (decision #19): any hit whose title says "plasmid" is dropped, whatever its taxid (NCBI files
+                      plasmid sequences under the host species, and plasmids move between species).
        top_sibling every top-bitscore named hit is a NON-target species in the target's NCBI complex"""
     from taxonomy import parse_staxids
     reads = pd.Index(sub["qseqid"].unique(), name="qseqid")
     R = pd.DataFrame(index=reads)
     R["has_named"] = False; R["has_target"] = False; R["ratio"] = float("nan")
-    R["tpid"] = float("nan"); R["top_sibling"] = False
+    R["tpid"] = float("nan"); R["tlen"] = float("nan"); R["tfrac"] = float("nan"); R["top_sibling"] = False
     if sub.empty:
         return R
     tkey = tax.target_key(target_taxid)
@@ -319,7 +331,7 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
             if not ids:
                 cache[v] = None                                    # no usable taxid -> fall back to name
             else:
-                unc = all(tax.is_uncultured(t) for t in ids)
+                unc = all(tax.is_uncultured(t) or (ignore_noncellular and tax.is_noncellular(t)) for t in ids)
                 tgt = tkey is not None and any(tkey in tax.lineage(t) for t in ids)
                 sib = (not tgt and tcx is not None and
                        all(tax.complex_of(t) == tcx and tax.species_of(t) is not None for t in ids))
@@ -334,7 +346,10 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
     if no_tax.any():                                               # rare: hit without a taxid -> names
         unc = unc.where(~no_tax, sub["hit_organism"].map(is_uncultured))
         tgt = tgt.where(~no_tax, sub["hit_organism"].map(lambda o: organism_matches(o, tname)))
-    s = sub.assign(_unc=unc.astype(bool), _tgt=tgt.astype(bool), _sib=sib.astype(bool))
+    unc = unc.astype(bool)
+    if ignore_plasmid:
+        unc = unc | sub["stitle"].fillna("").str.contains(_PLASMID)
+    s = sub.assign(_unc=unc, _tgt=tgt.astype(bool), _sib=sib.astype(bool))
     named = s[(~s["_unc"]) & s["bitscore"].notna()]
     if named.empty:
         return R
@@ -344,33 +359,49 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
     R["has_target"] = R.index.isin(t.index)
     R["ratio"] = (t["bitscore"] / top).reindex(R.index)
     R["tpid"] = t["pident"].reindex(R.index)
+    R["tlen"] = pd.to_numeric(t["length"], errors="coerce").reindex(R.index) if "length" in t else float("nan")
+    R["tfrac"] = named.groupby("qseqid")["_tgt"].mean().reindex(R.index)
     at_top = named[named["bitscore"] == named["qseqid"].map(top)]
     R["top_sibling"] = at_top.groupby("qseqid")["_sib"].all().reindex(R.index, fill_value=False).astype(bool)
     return R
 
 
-def label_reads(R: pd.DataFrame, margin: float, id_min: float) -> pd.Series:
-    """Per-read label at one margin from per_read_frame_tax output."""
+def label_reads(R: pd.DataFrame, margin: float, id_min: float, min_len: float = 0,
+                min_target_frac: float = 0) -> pd.Series:
+    """Per-read label at one margin from per_read_frame_tax output.
+    min_len (decision #16, off by default): a read that would be CONFIRMED but whose target alignment is shorter
+    than min_len bp is EXCLUDED_SHORT (too little aligned to be species evidence; not evidence against either).
+    min_target_frac (10% rule, under evaluation, off by default): a read that would be CONFIRMED but whose target
+    makes up less than this share of its kept named hits is EXCLUDED_NONSPECIFIC."""
     import numpy as np
     ratio = R["ratio"].fillna(-1.0).to_numpy(dtype=float)
     tpid = R["tpid"].fillna(-1.0).to_numpy(dtype=float)
-    conf = R["has_target"].to_numpy(bool) & (ratio >= 1.0 - margin) & (tpid >= id_min)
+    tlen = (R["tlen"] if "tlen" in R else pd.Series(np.inf, index=R.index)).fillna(-1.0).to_numpy(dtype=float)
+    tfrac = (R["tfrac"] if "tfrac" in R else pd.Series(1.0, index=R.index)).fillna(0.0).to_numpy(dtype=float)
+    hit = R["has_target"].to_numpy(bool) & (ratio >= 1.0 - margin) & (tpid >= id_min)
+    long_ok = (tlen >= min_len) if min_len and min_len > 0 else np.ones(len(R), bool)
+    spec_ok = (tfrac >= min_target_frac) if min_target_frac and min_target_frac > 0 else np.ones(len(R), bool)
     lab = np.where(~R["has_named"].to_numpy(bool), "EXCLUDED",
-          np.where(conf, "CONFIRMED",
-          np.where(R["top_sibling"].to_numpy(bool), "EXCLUDED_COMPLEX", "MISASSIGNED")))
+          np.where(hit & long_ok & spec_ok, "CONFIRMED",
+          np.where(hit & ~long_ok, "EXCLUDED_SHORT",
+          np.where(hit, "EXCLUDED_NONSPECIFIC",
+          np.where(R["top_sibling"].to_numpy(bool), "EXCLUDED_COMPLEX", "MISASSIGNED")))))
     return pd.Series(lab, index=R.index)
 
 
-def summarize_labels(lab: pd.Series, min_confirmed: int = 3) -> dict:
+def summarize_labels(lab: pd.Series) -> dict:
+    """Per-detection counts. No 'supported' call here: a minimum number of CONFIRMED reads (default 3) is an
+    option applied downstream in the Time-Series R script, so it can be switched off there."""
     c = Counter(lab)
     nc, nm = c.get("CONFIRMED", 0), c.get("MISASSIGNED", 0)
     ne, nx = c.get("EXCLUDED", 0), c.get("EXCLUDED_COMPLEX", 0)
-    denom = nc + nm + ne + nx
+    ns, nn = c.get("EXCLUDED_SHORT", 0), c.get("EXCLUDED_NONSPECIFIC", 0)
+    denom = nc + nm + ne + nx + ns + nn
     return {"rl_confirmed": nc, "rl_misassigned": nm, "rl_excluded": ne, "rl_excluded_complex": nx,
+            "rl_excluded_short": ns, "rl_excluded_nonspecific": nn,
             "rl_reads_hit": denom,
             "validated_fraction": round(nc / denom, 4) if denom else None,
-            "validated_fraction_informative": round(nc / (nc + nm), 4) if (nc + nm) else None,
-            "supported": nc >= min_confirmed}
+            "validated_fraction_informative": round(nc / (nc + nm), 4) if (nc + nm) else None}
 
 
 def load_sample(path: str):
@@ -421,7 +452,7 @@ def main():
                     help="drop reads whose best hit is uncultured/environmental (and not a match) from the denominator")
     ap.add_argument("--near_tie_margin", type=float, default=0.02,
                     help="read-level: target counts if its bitscore >= (1-margin) * top NAMED bitscore (default 0.02 = 2%%)")
-    ap.add_argument("--id_min", type=float, default=80.0, help="read-level: min %%id for the target hit (default 80)")
+    ap.add_argument("--id_min", type=float, default=90.0, help="read-level: min %%id for the target hit (default 90)")
     ap.add_argument("--synonyms", default=None,
                     help="v4: resources/taxon_synonyms.csv; name matching accepts any synonym of the target")
     ap.add_argument("--taxonomy", default=None,
@@ -429,6 +460,14 @@ def main():
                          "read-level validation matches by NCBI taxid + flags same-complex siblings")
     ap.add_argument("--clade_counts", default=None,
                     help="optional TSV (sample, taxid, reads_clade, total_reads) -> adds corrected/relative abundance")
+    ap.add_argument("--min_aln_len", type=float, default=0,
+                    help="v4 decision #16: target alignment must be >= this many bp to CONFIRM (else EXCLUDED_SHORT)")
+    ap.add_argument("--ignore_noncellular", action="store_true",
+                    help="v4 decision #17: ignore vector / plasmid / phage / 'bacterium' hits like uncultured ones")
+    ap.add_argument("--ignore_plasmid", action="store_true",
+                    help="v4 decision #19: ignore any hit whose title says 'plasmid'")
+    ap.add_argument("--min_target_frac", type=float, default=0,
+                    help="10%% rule (under evaluation): target must be >= this share of a read's kept named hits")
     a = ap.parse_args()
 
     taxid_to_name = {}
@@ -468,8 +507,10 @@ def main():
             else:
                 sub = df[df["taxid"] == taxid]
                 if tax is not None and "staxids" in sub.columns:
-                    rl = summarize_labels(label_reads(per_read_frame_tax(sub, taxid, tax, expected),
-                                                      a.near_tie_margin, a.id_min))
+                    rl = summarize_labels(label_reads(per_read_frame_tax(sub, taxid, tax, expected,
+                                                                         a.ignore_noncellular, a.ignore_plasmid),
+                                                      a.near_tie_margin, a.id_min, a.min_aln_len,
+                                                      a.min_target_frac))
                 else:
                     if tax is not None:
                         raise SystemExit(f"--taxonomy given but {sample} BLAST TSV has no staxids column")
@@ -499,10 +540,12 @@ def main():
                          "classification": label, "avg_pct_match": avg_pct, "avg_pct_uncultured": avg_unc,
                          "rl_confirmed": rl["rl_confirmed"], "rl_misassigned": rl["rl_misassigned"],
                          "rl_excluded": rl["rl_excluded"],
-                         "rl_excluded_complex": rl.get("rl_excluded_complex"), "rl_reads_hit": rl["rl_reads_hit"],
+                         "rl_excluded_complex": rl.get("rl_excluded_complex"),
+                         "rl_excluded_short": rl.get("rl_excluded_short"),
+                         "rl_excluded_nonspecific": rl.get("rl_excluded_nonspecific"),
+                         "rl_reads_hit": rl["rl_reads_hit"],
                          "validated_fraction": rl["validated_fraction"],
                          "validated_fraction_informative": rl.get("validated_fraction_informative"),
-                         "supported": rl["supported"],
                          "reads_clade": reads_clade, "corrected_abundance": corrected,
                          "relative_abundance": relative,
                          "R1_n_reads": r1.get("n_reads"), "R1_n_match": r1.get("n_match"),
@@ -519,7 +562,8 @@ def main():
         print(f"  {lab:<22} {c:>5} ({c/len(out)*100:.1f}%)")
     print("\nREAD-LEVEL VALIDATION SUMMARY (within-%.0f%% near-tie, uncultured ignored)" % (a.near_tie_margin * 100))
     vf = out["validated_fraction"].dropna()
-    print(f"  detections with reads: {len(vf):>5}   supported (CONFIRMED > 2): {int(out['supported'].sum())}")
+    print(f"  detections with reads: {len(vf):>5}   with >= 1 CONFIRMED: {int((out['rl_confirmed'] >= 1).sum())}"
+          f"   with >= 3 (R-script option): {int((out['rl_confirmed'] >= 3).sum())}")
     if len(vf):
         print(f"  validated_fraction:  mean {vf.mean():.3f}  median {vf.median():.3f}")
     print(f"  reads:  CONFIRMED {int(out['rl_confirmed'].sum())}   "

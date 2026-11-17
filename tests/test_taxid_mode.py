@@ -22,7 +22,17 @@ from false_positive_detection import per_read_frame_tax, label_reads, summarize_
 
 NODES = [  # taxid, parent, rank, name
     (1, 1, "no rank", "root"),
-    (543, 1, "family", "Enterobacteriaceae"),
+    (131567, 1, "no rank", "cellular organisms"),
+    (2, 131567, "superkingdom", "Bacteria"),
+    (2323, 2, "no rank", "unclassified Bacteria"),
+    (1869227, 2323, "species", "bacterium"),
+    (28384, 1, "no rank", "other sequences"),
+    (29278, 28384, "no rank", "vectors"),
+    (2911, 29278, "species", "Shuttle vector pTEX"),
+    (10239, 1, "superkingdom", "Viruses"),
+    (2731619, 10239, "class", "Caudoviricetes"),
+    (1980, 2731619, "species", "Caudoviricetes sp."),
+    (543, 2, "family", "Enterobacteriaceae"),
     (570, 543, "genus", "Klebsiella"),
     (3390273, 570, "species group", "Klebsiella pneumoniae complex"),
     (573, 3390273, "species", "Klebsiella pneumoniae"),
@@ -32,7 +42,7 @@ NODES = [  # taxid, parent, rank, name
     (575, 570, "species", "Klebsiella planticola"),
     (561, 543, "genus", "Escherichia"),
     (562, 561, "species", "Escherichia coli"),
-    (48479, 1, "no rank", "environmental samples"),
+    (48479, 2, "no rank", "environmental samples"),
     (77133, 48479, "species", "uncultured bacterium"),
 ]
 MERGED = [(99999, 54291)]  # an old taxid now merged into 54291
@@ -53,15 +63,17 @@ TAX = _tax()
 
 
 def _hits(rows):
-    """rows: (read, staxids, bitscore, pident, title)"""
-    df = pd.DataFrame(rows, columns=["read", "staxids", "bitscore", "pident", "stitle"])
+    """rows: (read, staxids, bitscore, pident, title[, length])"""
+    rows = [r if len(r) == 6 else (*r, 150) for r in rows]
+    df = pd.DataFrame(rows, columns=["read", "staxids", "bitscore", "pident", "stitle", "length"])
     df["qseqid"] = "T|R1|" + df["read"]
     df["hit_organism"] = df["stitle"]
     return df
 
 
-def _labels(rows, target, margin=0.02, id_min=80.0):
-    return label_reads(per_read_frame_tax(_hits(rows), target, TAX), margin, id_min).to_dict()
+def _labels(rows, target, margin=0.02, id_min=80.0, min_len=0, noncell=False, plasmid=False, frac=0):
+    return label_reads(per_read_frame_tax(_hits(rows), target, TAX, ignore_noncellular=noncell,
+                                          ignore_plasmid=plasmid), margin, id_min, min_len, frac).to_dict()
 
 
 def test_taxonomy_basics():
@@ -120,11 +132,59 @@ def test_low_identity_target_is_misassigned():
     assert _labels([("r", "573", 279, 79.0, "K. pneumoniae")], 573)["T|R1|r"] == "MISASSIGNED"
 
 
+def test_min_alignment_length_16():
+    rows = [("r", "573", 95, 100.0, "K. pneumoniae", 51)]
+    assert _labels(rows, 573)["T|R1|r"] == "CONFIRMED", "no length rule by default"
+    assert _labels(rows, 573, min_len=100)["T|R1|r"] == "EXCLUDED_SHORT"
+    assert _labels([("s", "573", 270, 100.0, "K. pneumoniae", 150)], 573, min_len=100)["T|R1|s"] == "CONFIRMED"
+    # a short alignment never rescues a read the target did not win: still MISASSIGNED
+    assert _labels([("t", "562", 279, 100.0, "E. coli", 150), ("t", "573", 95, 100.0, "K. pn", 51)], 573,
+                   min_len=100)["T|R1|t"] == "MISASSIGNED"
+
+
+def test_noncellular_hits_ignored_17():
+    assert TAX.is_noncellular(2911) and TAX.is_noncellular(1980) and TAX.is_noncellular(1869227)
+    assert not TAX.is_noncellular(573)
+    # vector / phage / "bacterium" outscore the target: MISASSIGNED unless #17 ignores them
+    rows = [("r", "2911", 279, 100.0, "Shuttle vector pTEX"), ("r", "1980", 279, 100.0, "Caudoviricetes sp."),
+            ("r", "1869227", 279, 100.0, "bacterium"), ("r", "573", 240, 99.0, "K. pneumoniae")]
+    assert _labels(rows, 573)["T|R1|r"] == "MISASSIGNED"
+    assert _labels(rows, 573, noncell=True)["T|R1|r"] == "CONFIRMED"
+    # only non-cellular hits -> EXCLUDED (nothing named left), not MISASSIGNED
+    assert _labels([("v", "2911", 279, 100.0, "Shuttle vector")], 573, noncell=True)["T|R1|v"] == "EXCLUDED"
+
+
+def test_plasmid_hits_ignored_19():
+    # best hit is a C.-difficile-filed plasmid: counts as target without #19, is dropped with it
+    rows = [("r", "573", 182, 99.0, "Klebsiella pneumoniae strain X plasmid pKP1, complete sequence"),
+            ("r", "562", 150, 99.0, "Escherichia coli chromosome")]
+    assert _labels(rows, 573)["T|R1|r"] == "CONFIRMED"
+    assert _labels(rows, 573, plasmid=True)["T|R1|r"] == "MISASSIGNED"
+    assert _labels([("p", "573", 182, 99.0, "K. pneumoniae plasmid pKP1")], 573, plasmid=True)["T|R1|p"] == "EXCLUDED"
+
+
+def test_identity_floor_90():
+    rows = [("r", "573", 182, 87.8, "K. pneumoniae chromosome")]
+    assert _labels(rows, 573, id_min=80)["T|R1|r"] == "CONFIRMED"
+    assert _labels(rows, 573, id_min=90)["T|R1|r"] == "MISASSIGNED"
+
+
+def test_target_fraction_rule_option():
+    # target ties the top but is 1 of 10 kept named hits (10%); uncultured hits do not count in the share
+    rows = [("r", "573", 279, 100.0, "K. pneumoniae")] + [("r", "562", 279, 100.0, "E. coli")] * 9 \
+        + [("r", "77133", 279, 100.0, "uncultured bacterium")] * 20
+    assert _labels(rows, 573)["T|R1|r"] == "CONFIRMED", "rule off by default"
+    assert _labels(rows, 573, frac=0.10)["T|R1|r"] == "CONFIRMED", "10% exactly passes; uncultured not counted"
+    assert _labels(rows + [("r", "562", 279, 100.0, "E. coli")], 573, frac=0.10)["T|R1|r"] == "EXCLUDED_NONSPECIFIC"
+
+
 def test_summary_fractions():
     lab = pd.Series(["CONFIRMED"] * 6 + ["MISASSIGNED"] * 2 + ["EXCLUDED_COMPLEX"] * 2)
     s = summarize_labels(lab)
     assert s["validated_fraction"] == 0.6 and s["validated_fraction_informative"] == 0.75
-    assert s["supported"] and s["rl_excluded_complex"] == 2
+    s2 = summarize_labels(pd.Series(["CONFIRMED"] * 6 + ["MISASSIGNED"] * 2 + ["EXCLUDED_SHORT"] * 2))
+    assert s2["rl_excluded_short"] == 2 and s2["validated_fraction"] == 0.6 and s2["validated_fraction_informative"] == 0.75
+    assert "supported" not in s and s["rl_excluded_complex"] == 2
 
 
 if __name__ == "__main__":
