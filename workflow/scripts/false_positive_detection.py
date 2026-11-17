@@ -313,12 +313,16 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
                       like uncultured ones.
    ignore_plasmid (decision #19): any hit whose title says "plasmid" is dropped, whatever its taxid (NCBI files
                       plasmid sequences under the host species, and plasmids move between species).
+                      pratio = best plasmid bitscore / top bitscore over hits kept BEFORE the plasmid drop; a read
+                      whose plasmid hit scores within the margin of that top is on a mobile element and becomes
+                      EXCLUDED_PLASMID unless it is CONFIRMED on non-plasmid hits (counts neither for nor against).
        top_sibling every top-bitscore named hit is a NON-target species in the target's NCBI complex"""
     from taxonomy import parse_staxids
     reads = pd.Index(sub["qseqid"].unique(), name="qseqid")
     R = pd.DataFrame(index=reads)
     R["has_named"] = False; R["has_target"] = False; R["ratio"] = float("nan")
     R["tpid"] = float("nan"); R["tlen"] = float("nan"); R["tfrac"] = float("nan"); R["top_sibling"] = False
+    R["pratio"] = float("nan")
     if sub.empty:
         return R
     tkey = tax.target_key(target_taxid)
@@ -348,7 +352,13 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
         tgt = tgt.where(~no_tax, sub["hit_organism"].map(lambda o: organism_matches(o, tname)))
     unc = unc.astype(bool)
     if ignore_plasmid:
-        unc = unc | sub["stitle"].fillna("").str.contains(_PLASMID)
+        pl = sub["stitle"].fillna("").str.contains(_PLASMID)
+        pre = sub[(~unc) & sub["bitscore"].notna()]
+        if not pre.empty:
+            ptop = pre.groupby("qseqid")["bitscore"].max()
+            pbest = pre[pl.loc[pre.index]].groupby("qseqid")["bitscore"].max()
+            R["pratio"] = (pbest / ptop).reindex(R.index)
+        unc = unc | pl
     s = sub.assign(_unc=unc, _tgt=tgt.astype(bool), _sib=sib.astype(bool))
     named = s[(~s["_unc"]) & s["bitscore"].notna()]
     if named.empty:
@@ -381,11 +391,16 @@ def label_reads(R: pd.DataFrame, margin: float, id_min: float, min_len: float = 
     hit = R["has_target"].to_numpy(bool) & (ratio >= 1.0 - margin) & (tpid >= id_min)
     long_ok = (tlen >= min_len) if min_len and min_len > 0 else np.ones(len(R), bool)
     spec_ok = (tfrac >= min_target_frac) if min_target_frac and min_target_frac > 0 else np.ones(len(R), bool)
-    lab = np.where(~R["has_named"].to_numpy(bool), "EXCLUDED",
+    pratio = (R["pratio"] if "pratio" in R else pd.Series(np.nan, index=R.index)).fillna(-1.0).to_numpy(dtype=float)
+    plas = pratio >= 1.0 - margin
+    named_ = R["has_named"].to_numpy(bool)
+    lab = np.where(~named_ & plas, "EXCLUDED_PLASMID",
+          np.where(~named_, "EXCLUDED",
           np.where(hit & long_ok & spec_ok, "CONFIRMED",
           np.where(hit & ~long_ok, "EXCLUDED_SHORT",
           np.where(hit, "EXCLUDED_NONSPECIFIC",
-          np.where(R["top_sibling"].to_numpy(bool), "EXCLUDED_COMPLEX", "MISASSIGNED")))))
+          np.where(plas, "EXCLUDED_PLASMID",
+          np.where(R["top_sibling"].to_numpy(bool), "EXCLUDED_COMPLEX", "MISASSIGNED")))))))
     return pd.Series(lab, index=R.index)
 
 
@@ -396,10 +411,11 @@ def summarize_labels(lab: pd.Series) -> dict:
     nc, nm = c.get("CONFIRMED", 0), c.get("MISASSIGNED", 0)
     ne, nx = c.get("EXCLUDED", 0), c.get("EXCLUDED_COMPLEX", 0)
     ns, nn = c.get("EXCLUDED_SHORT", 0), c.get("EXCLUDED_NONSPECIFIC", 0)
-    denom = nc + nm + ne + nx + ns + nn
+    npl = c.get("EXCLUDED_PLASMID", 0)
+    denom = nc + nm + ne + nx + ns + nn + npl
     return {"rl_confirmed": nc, "rl_misassigned": nm, "rl_excluded": ne, "rl_excluded_complex": nx,
             "rl_excluded_short": ns, "rl_excluded_nonspecific": nn,
-            "rl_reads_hit": denom,
+            "rl_excluded_plasmid": npl, "rl_reads_hit": denom,
             "validated_fraction": round(nc / denom, 4) if denom else None,
             "validated_fraction_informative": round(nc / (nc + nm), 4) if (nc + nm) else None}
 
@@ -542,6 +558,7 @@ def main():
                          "rl_excluded": rl["rl_excluded"],
                          "rl_excluded_complex": rl.get("rl_excluded_complex"),
                          "rl_excluded_short": rl.get("rl_excluded_short"),
+                         "rl_excluded_plasmid": rl.get("rl_excluded_plasmid"),
                          "rl_excluded_nonspecific": rl.get("rl_excluded_nonspecific"),
                          "rl_reads_hit": rl["rl_reads_hit"],
                          "validated_fraction": rl["validated_fraction"],
@@ -567,7 +584,8 @@ def main():
     if len(vf):
         print(f"  validated_fraction:  mean {vf.mean():.3f}  median {vf.median():.3f}")
     print(f"  reads:  CONFIRMED {int(out['rl_confirmed'].sum())}   "
-          f"MISASSIGNED {int(out['rl_misassigned'].sum())}   EXCLUDED {int(out['rl_excluded'].sum())}")
+          f"MISASSIGNED {int(out['rl_misassigned'].sum())}   EXCLUDED {int(out['rl_excluded'].sum())}   "
+          f"EXCLUDED_PLASMID {int(out['rl_excluded_plasmid'].fillna(0).sum())}")
     if clade_counts:
         ra = out["relative_abundance"].dropna()
         print(f"  abundance computed for {len(ra)} detections (clade_counts provided)")

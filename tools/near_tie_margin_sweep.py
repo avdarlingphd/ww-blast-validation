@@ -136,17 +136,17 @@ def main():
                 if tax is not None:
                     sm = (summarize_labels(label_reads(R, m, a.id_min, ml, mf)) if R is not None
                           else summarize_labels(pd.Series(dtype=str)))
-                    nc, nm, ne, nx, ns, nn = (sm["rl_confirmed"], sm["rl_misassigned"], sm["rl_excluded"],
-                                              sm["rl_excluded_complex"], sm["rl_excluded_short"],
-                                              sm["rl_excluded_nonspecific"])
+                    nc, nm, ne, nx, ns, nn, npl = (sm["rl_confirmed"], sm["rl_misassigned"], sm["rl_excluded"],
+                                                   sm["rl_excluded_complex"], sm["rl_excluded_short"],
+                                                   sm["rl_excluded_nonspecific"], sm["rl_excluded_plasmid"])
                 else:
-                    nc, nm, ne = tally(R, m, a.id_min); nx = ns = nn = 0
-                denom = nc + nm + ne + nx + ns + nn
+                    nc, nm, ne = tally(R, m, a.id_min); nx = ns = nn = npl = 0
+                denom = nc + nm + ne + nx + ns + nn + npl
                 frac = round(nc / denom, 4) if denom else None
                 row = {"sample": sample, "taxid": taxid, "expected_organism": expected,
                        "margin": m, "min_aln_len": ml, "min_target_frac": mf, "confirmed": nc,
                        "misassigned": nm, "excluded": ne, "excluded_complex": nx, "excluded_short": ns,
-                       "excluded_nonspecific": nn, "reads_hit": denom, "validated_fraction": frac,
+                       "excluded_nonspecific": nn, "excluded_plasmid": npl, "reads_hit": denom, "validated_fraction": frac,
                        "validated_fraction_informative": round(nc / (nc + nm), 4) if (nc + nm) else None}
                 if cc is not None:
                     reads_clade, total_reads = cc
@@ -164,13 +164,14 @@ def main():
 
     print("\nNEAR-TIE MARGIN SWEEP  (uncultured ignored, %%id >= %.0f)" % a.id_min)
     print(f"{'margin':>7} {'min_bp':>7} {'min_frac':>8} {'CONFIRMED':>11} {'MISASSIGNED':>12} {'EXCLUDED':>10} "
-          f"{'EXCL_CPLX':>10} {'EXCL_SHORT':>11} {'EXCL_NONSP':>11} {'mean_vf':>8} {'>=1 conf':>9} {'>=3 conf':>9}"
+          f"{'EXCL_CPLX':>10} {'EXCL_SHORT':>11} {'EXCL_NONSP':>11} {'EXCL_PLSMD':>11} {'mean_vf':>8} {'>=1 conf':>9} {'>=3 conf':>9}"
           f" {'detections':>11}")
     for (m, ml, mf), d in out.groupby(["margin", "min_aln_len", "min_target_frac"]):
         vf = d["validated_fraction"].dropna()
         print(f"{m:>7.2f} {ml:>7.0f} {mf:>8.2f} {int(d['confirmed'].sum()):>11,} {int(d['misassigned'].sum()):>12,} "
               f"{int(d['excluded'].sum()):>10,} {int(d['excluded_complex'].sum()):>10,} "
-              f"{int(d['excluded_short'].sum()):>11,} {int(d['excluded_nonspecific'].sum()):>11,} {vf.mean():>8.3f} "
+              f"{int(d['excluded_short'].sum()):>11,} {int(d['excluded_nonspecific'].sum()):>11,} "
+              f"{int(d['excluded_plasmid'].sum()):>11,} {vf.mean():>8.3f} "
               f"{int((d['confirmed'] >= 1).sum()):>9,} {int((d['confirmed'] >= 3).sum()):>9,} {len(d):>11,}")
     print(f"\nreport -> {a.output}")
 

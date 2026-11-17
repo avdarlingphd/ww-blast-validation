@@ -159,8 +159,17 @@ def test_plasmid_hits_ignored_19():
     rows = [("r", "573", 182, 99.0, "Klebsiella pneumoniae strain X plasmid pKP1, complete sequence"),
             ("r", "562", 150, 99.0, "Escherichia coli chromosome")]
     assert _labels(rows, 573)["T|R1|r"] == "CONFIRMED"
-    assert _labels(rows, 573, plasmid=True)["T|R1|r"] == "MISASSIGNED"
-    assert _labels([("p", "573", 182, 99.0, "K. pneumoniae plasmid pKP1")], 573, plasmid=True)["T|R1|p"] == "EXCLUDED"
+    # read on a mobile element: neither for nor against the target
+    assert _labels(rows, 573, plasmid=True)["T|R1|r"] == "EXCLUDED_PLASMID"
+    assert _labels([("p", "573", 182, 99.0, "K. pneumoniae plasmid pKP1")], 573, plasmid=True)["T|R1|p"] == "EXCLUDED_PLASMID"
+    # target chromosome scores with the plasmid: still CONFIRMED on the non-plasmid hit
+    assert _labels(rows + [("r", "573", 181, 99.0, "Klebsiella pneumoniae chromosome")], 573,
+                   plasmid=True)["T|R1|r"] == "CONFIRMED"
+    # plasmid hit well below a non-target chromosome: an ordinary MISASSIGNED read
+    rows2 = [("m", "562", 279, 100.0, "Escherichia coli chromosome"),
+             ("m", "573", 200, 99.0, "Klebsiella pneumoniae plasmid pKP1")]
+    assert _labels(rows2, 573, plasmid=True)["T|R1|m"] == "MISASSIGNED"
+    assert summarize_labels(pd.Series(["CONFIRMED", "EXCLUDED_PLASMID"]))["rl_excluded_plasmid"] == 1
 
 
 def test_identity_floor_90():
