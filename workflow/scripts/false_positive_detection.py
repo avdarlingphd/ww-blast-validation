@@ -44,7 +44,10 @@ v4 TAXID MODE (--taxonomy TABLE; needs staxids in the BLAST outfmt): hits are ma
     MISASSIGNED       anything else (a non-complex organism wins, or the target is too far / too low-id)
   validated_fraction = CONFIRMED / all reads with a BLAST hit (EXCLUDED and EXCLUDED_COMPLEX in the
   denominator); validated_fraction_informative = CONFIRMED / (CONFIRMED + MISASSIGNED).
-  --min_aln_len (#16): a read that would be CONFIRMED on a target alignment shorter than this is EXCLUDED_SHORT.
+  --min_target_frac (#20, default 0.15): a read that would be CONFIRMED but whose target hits are < this share of the kept named hits
+                    scoring within the near-tie margin (2%) of the top (uncultured, non-organism and plasmid hits
+                    dropped first) is EXCLUDED_NONSPECIFIC. A target alone at the top (share 100%) is never removed.
+  --min_aln_len (#16, not adopted, default 0 = off): a read that would be CONFIRMED on a shorter target alignment is EXCLUDED_SHORT.
   --ignore_noncellular (#17): vector / plasmid / phage / "bacterium" hits are ignored like uncultured ones.
 
 Usage (called by the Snakemake classify rule):
@@ -301,14 +304,17 @@ _PLASMID = re.compile(r"plasmid", re.I)
 
 
 def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = None,
-                       ignore_noncellular: bool = False, ignore_plasmid: bool = False) -> pd.DataFrame:
+                       ignore_noncellular: bool = False, ignore_plasmid: bool = False,
+                       top_window: float = 0.02) -> pd.DataFrame:
     """One row per read (qseqid) with the margin-independent pieces, matching by NCBI taxid:
        has_named   any non-uncultured hit with a bitscore
        has_target  a hit whose taxid descends from target_key(target_taxid)
        ratio       best target bitscore / top named bitscore
        tpid        %id of that best target hit
        tlen        aligned length (bp) of that best target hit (decision #16)
-       tfrac       target hits / all kept named hits for the read (up to 100 hits; 10% rule, under evaluation)
+       tfrac       target hits / all kept named hits for the read (up to 100 hits; information only)
+       tfrac_top   target hits / kept named hits scoring within top_window (2%) of the top named bitscore
+                   (decision #20: the target-share rule)
    ignore_noncellular (decision #17): vectors, unidentified plasmids, phages and "bacterium" hits are dropped
                       like uncultured ones.
    ignore_plasmid (decision #19): any hit whose title says "plasmid" is dropped, whatever its taxid (NCBI files
@@ -322,7 +328,7 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
     R = pd.DataFrame(index=reads)
     R["has_named"] = False; R["has_target"] = False; R["ratio"] = float("nan")
     R["tpid"] = float("nan"); R["tlen"] = float("nan"); R["tfrac"] = float("nan"); R["top_sibling"] = False
-    R["pratio"] = float("nan")
+    R["pratio"] = float("nan"); R["tfrac_top"] = float("nan")
     if sub.empty:
         return R
     tkey = tax.target_key(target_taxid)
@@ -371,6 +377,8 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
     R["tpid"] = t["pident"].reindex(R.index)
     R["tlen"] = pd.to_numeric(t["length"], errors="coerce").reindex(R.index) if "length" in t else float("nan")
     R["tfrac"] = named.groupby("qseqid")["_tgt"].mean().reindex(R.index)
+    near = named[named["bitscore"] >= (1.0 - top_window) * named["qseqid"].map(top)]
+    R["tfrac_top"] = near.groupby("qseqid")["_tgt"].mean().reindex(R.index)
     at_top = named[named["bitscore"] == named["qseqid"].map(top)]
     R["top_sibling"] = at_top.groupby("qseqid")["_sib"].all().reindex(R.index, fill_value=False).astype(bool)
     return R
@@ -379,15 +387,16 @@ def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = Non
 def label_reads(R: pd.DataFrame, margin: float, id_min: float, min_len: float = 0,
                 min_target_frac: float = 0) -> pd.Series:
     """Per-read label at one margin from per_read_frame_tax output.
-    min_len (decision #16, off by default): a read that would be CONFIRMED but whose target alignment is shorter
+    min_len (decision #16, not adopted; CLI default 0 = off): a read that would be CONFIRMED but whose target alignment is shorter
     than min_len bp is EXCLUDED_SHORT (too little aligned to be species evidence; not evidence against either).
-    min_target_frac (10% rule, under evaluation, off by default): a read that would be CONFIRMED but whose target
-    makes up less than this share of its kept named hits is EXCLUDED_NONSPECIFIC."""
+    min_target_frac (decision #20, target-share rule): a read that would be CONFIRMED but whose target makes up
+    less than this share of the kept named hits scoring within 2% of the top (tfrac_top) is EXCLUDED_NONSPECIFIC.
+    Lower-scoring hits never count, so a target alone at the top (share 100%) is never removed."""
     import numpy as np
     ratio = R["ratio"].fillna(-1.0).to_numpy(dtype=float)
     tpid = R["tpid"].fillna(-1.0).to_numpy(dtype=float)
     tlen = (R["tlen"] if "tlen" in R else pd.Series(np.inf, index=R.index)).fillna(-1.0).to_numpy(dtype=float)
-    tfrac = (R["tfrac"] if "tfrac" in R else pd.Series(1.0, index=R.index)).fillna(0.0).to_numpy(dtype=float)
+    tfrac = (R["tfrac_top"] if "tfrac_top" in R else pd.Series(1.0, index=R.index)).fillna(0.0).to_numpy(dtype=float)
     hit = R["has_target"].to_numpy(bool) & (ratio >= 1.0 - margin) & (tpid >= id_min)
     long_ok = (tlen >= min_len) if min_len and min_len > 0 else np.ones(len(R), bool)
     spec_ok = (tfrac >= min_target_frac) if min_target_frac and min_target_frac > 0 else np.ones(len(R), bool)
@@ -476,15 +485,17 @@ def main():
                          "read-level validation matches by NCBI taxid + flags same-complex siblings")
     ap.add_argument("--clade_counts", default=None,
                     help="optional TSV (sample, taxid, reads_clade, total_reads) -> adds corrected/relative abundance")
-    ap.add_argument("--min_aln_len", type=float, default=60,
-                    help="v4 decision #16: target alignment must be >= this many bp to CONFIRM (else EXCLUDED_SHORT; "
-                         "default 60 = 40%% of a 150 bp read; 0 turns it off)")
+    ap.add_argument("--min_aln_len", type=float, default=0,
+                    help="v4 decision #16 (not adopted, default 0 = off): target alignment must be >= this many bp to "
+                         "CONFIRM (else EXCLUDED_SHORT)")
     ap.add_argument("--ignore_noncellular", action=argparse.BooleanOptionalAction, default=True,
                     help="v4 decision #17 (default on): ignore vector / plasmid / phage / 'bacterium' hits like uncultured ones")
     ap.add_argument("--ignore_plasmid", action=argparse.BooleanOptionalAction, default=True,
                     help="v4 decision #19 (default on): hits titled 'plasmid' do not score; plasmid-borne reads are EXCLUDED_PLASMID")
-    ap.add_argument("--min_target_frac", type=float, default=0,
-                    help="10%% rule (not adopted, off by default): target must be >= this share of a read's kept named hits")
+    ap.add_argument("--min_target_frac", type=float, default=0.15,
+                    help="v4 decision #20, target-share rule (default 0.15; 0 turns it off): target hits must be >= this share of the "
+                         "read's kept named hits within the near-tie margin of the top (uncultured, non-organism and plasmid "
+                         "hits dropped first), else EXCLUDED_NONSPECIFIC")
     a = ap.parse_args()
 
     taxid_to_name = {}
@@ -525,7 +536,8 @@ def main():
                 sub = df[df["taxid"] == taxid]
                 if tax is not None and "staxids" in sub.columns:
                     rl = summarize_labels(label_reads(per_read_frame_tax(sub, taxid, tax, expected,
-                                                                         a.ignore_noncellular, a.ignore_plasmid),
+                                                                         a.ignore_noncellular, a.ignore_plasmid,
+                                                                         a.near_tie_margin),
                                                       a.near_tie_margin, a.id_min, a.min_aln_len,
                                                       a.min_target_frac))
                 else:

@@ -179,12 +179,21 @@ def test_identity_floor_90():
 
 
 def test_target_fraction_rule_option():
-    # target ties the top but is 1 of 10 kept named hits (10%); uncultured hits do not count in the share
+    # #20: share of the target among kept named hits within 2% of the top; uncultured and lower-scoring hits do not count
     rows = [("r", "573", 279, 100.0, "K. pneumoniae")] + [("r", "562", 279, 100.0, "E. coli")] * 9 \
         + [("r", "77133", 279, 100.0, "uncultured bacterium")] * 20
     assert _labels(rows, 573)["T|R1|r"] == "CONFIRMED", "rule off by default"
-    assert _labels(rows, 573, frac=0.10)["T|R1|r"] == "CONFIRMED", "10% exactly passes; uncultured not counted"
+    assert _labels(rows, 573, frac=0.10)["T|R1|r"] == "CONFIRMED", "1 of 10 at the top = 10% passes; uncultured not counted"
     assert _labels(rows + [("r", "562", 279, 100.0, "E. coli")], 573, frac=0.10)["T|R1|r"] == "EXCLUDED_NONSPECIFIC"
+    # target alone at the top: lower-scoring hits filling the list never count
+    solo = [("r", "573", 279, 100.0, "K. pneumoniae")] + [("r", "1280", 250, 95.0, "S. aureus")] * 20
+    assert _labels(solo, 573, frac=0.50)["T|R1|r"] == "CONFIRMED", "sole best target = 100% of the top hits"
+    # a near tie (within 2%) counts in the share: 1 target + 3 E. coli at 275/279 -> 25%
+    near = solo + [("r", "562", 275, 99.6, "E. coli")] * 3
+    assert _labels(near, 573, frac=0.25)["T|R1|r"] == "CONFIRMED"
+    assert _labels(near, 573, frac=0.30)["T|R1|r"] == "EXCLUDED_NONSPECIFIC"
+    # a hit just outside 2% (273/279 = 97.8%) does not count
+    assert _labels(solo + [("r", "562", 273, 99.0, "E. coli")] * 3, 573, frac=0.50)["T|R1|r"] == "CONFIRMED"
 
 
 def test_summary_fractions():
