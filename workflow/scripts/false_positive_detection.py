@@ -26,6 +26,29 @@ v2.1 classification logic (current):
   * READ FLOOR: a detection resting on a single read (n_reads == 1, trivially 100% match) is called
     UNCERTAIN, not TRUE_POSITIVE. TRUE_POSITIVE requires >= 2 reads total across the valid read sets.
 
+v3 read-level validation (ADDITIVE, non-destructive): alongside the legacy per-detection classification,
+  each read is scored CONFIRMED / MISASSIGNED / EXCLUDED (classify_one_read): uncultured/environmental
+  hits are ignored, and the target CONFIRMS a read if it is a NAMED hit within --near_tie_margin (default
+  2%) of the top named bitscore with %id >= --id_min. Per (sample, taxid) the report gains rl_confirmed,
+  rl_misassigned, rl_excluded and validated_fraction = CONFIRMED/(CONFIRMED+MISASSIGNED+EXCLUDED). With --clade_counts (sample,taxid,reads_clade,total_reads) it also adds
+  corrected_abundance = validated_fraction * reads_clade and relative_abundance = corrected / total_reads.
+
+v4 TAXID MODE (--taxonomy TABLE; needs staxids in the BLAST outfmt): hits are matched to the Kraken target
+  by NCBI taxid rolled up to species (taxonomy.py), not by name, so renames (Raoultella -> Klebsiella),
+  "[Mycobacterium]" brackets and "MAG:" titles no longer cause false MISASSIGNED calls. Per read:
+    EXCLUDED          no named (non-uncultured) hit
+    CONFIRMED         a target-species hit within the margin of the top named bitscore, %id >= id_min
+    EXCLUDED_COMPLEX  not confirmed, and every top-scoring named hit is a SIBLING species in the target's
+                      NCBI complex ("species group", e.g. Klebsiella pneumoniae complex)
+    MISASSIGNED       anything else (a non-complex organism wins, or the target is too far / too low-id)
+  validated_fraction = CONFIRMED / all reads with a BLAST hit (EXCLUDED and EXCLUDED_COMPLEX in the
+  denominator); validated_fraction_informative = CONFIRMED / (CONFIRMED + MISASSIGNED).
+  --min_target_frac (#20, default 0.15): a read that would be CONFIRMED but whose target hits are < this share of the kept named hits
+                    scoring within the near-tie margin (2%) of the top (uncultured, non-organism and plasmid hits
+                    dropped first) is EXCLUDED_NONSPECIFIC. A target alone at the top (share 100%) is never removed.
+  --min_aln_len (#16, not adopted, default 0 = off): a read that would be CONFIRMED on a shorter target alignment is EXCLUDED_SHORT.
+  --ignore_noncellular (#17): vector / plasmid / phage / "bacterium" hits are ignored like uncultured ones.
+
 Usage (called by the Snakemake classify rule):
     python false_positive_detection.py --blast_dir DIR --taxid_list TSV --taxid_names CSV
         --output report.tsv [--threshold 80] [--min_match_reads 3]
@@ -36,7 +59,8 @@ import pandas as pd
 from collections import Counter
 
 # BLAST outfmt 6 columns (MUST match the blast rule): bitscore added for top-hit selection
-COLS = ["qseqid", "sscinames", "pident", "length", "evalue", "bitscore", "stitle"]
+COLS = ["qseqid", "sscinames", "pident", "length", "evalue", "bitscore", "stitle"]          # v2/v3 runs
+COLS_V4 = ["qseqid", "sscinames", "staxids", "pident", "length", "evalue", "bitscore", "stitle"]  # v4 (taxids)
 
 _STOP = re.compile(r"\b(strain|subsp\.?|var\.|pv\.|chromosome|plasmid|DNA|RNA|scaffold|contig|complete|"
                    r"partial|whole|genome|sequence|assembly|node|clone|isolate|sp\.\s|cf\.\s)\b", re.I)
@@ -54,19 +78,55 @@ def _tokens(name: str):
     # lowercase, strip surrounding punctuation/brackets per token, drop empties
     return [t for t in (re.sub(r"[^a-z0-9]", "", w) for w in name.lower().split()) if t]
 
+# ---- synonyms (v4) ---------------------------------------------------------------------------------
+# resources/taxon_synonyms.csv (tools/build_synonym_table.py): every name a target goes by (Kraken name,
+# NCBI current name, NCBI synonyms, epithet x genus synonyms, manual). With it loaded, a species-level
+# candidate matches a hit whose genus+epithet equals ANY of its names (Raoultella ornithinolytica ==
+# Klebsiella ornithinolytica). Title prefixes such as "MAG:" / "TPA_asm:" are always stripped.
+_SYNONYMS = {}          # name-key of the Kraken name -> set of name-keys it also goes by
+_INFRA = re.compile(r"\b(subsp|ssp|var|pv|bv|serovar|biovar|forma|genomosp|genomovar)\b\.?", re.I)
+_PREFIX = re.compile(r"^\s*(?:MAG\s*TPA_asm|MAG|TPA_asm|TPA_inf|TPA_exp|TPA)\s*:\s*", re.I)
+
+
+def load_synonyms(path):
+    """Fill the synonym registry from taxon_synonyms.csv; returns the number of target names loaded."""
+    _SYNONYMS.clear()
+    if not path or not os.path.exists(path):
+        return 0
+    syn = pd.read_csv(path, dtype=str).fillna("")
+    for kname, grp in syn.groupby("kraken_name"):
+        k = _species_key(kname)
+        if k is None:
+            continue
+        names = [n for n in grp["synonym"] if not _INFRA.search(n)] + [n for n in grp["ncbi_current_name"] if n]
+        keys = {_species_key(n) for n in names}
+        _SYNONYMS.setdefault(k, set()).update(x for x in keys if x)
+    return len(_SYNONYMS)
+
+
+def _species_key(name):
+    t = _tokens(_PREFIX.sub("", str(name)))
+    return (t[0], t[1]) if len(t) >= 2 else None
+
+
 def organism_matches(hit: str, expected: str) -> bool:
     # v2.1: species-level matching. A SPECIES-level candidate (genus + epithet) requires BOTH the genus
     # and the species epithet to agree -- a genus-only hit or a sibling-species hit does NOT confirm it.
     # A GENUS-level candidate (single token) matches at the genus.
-    if not hit or hit.lower() in ("unknown", "n/a", ""):
+    if not isinstance(hit, str) or hit.lower() in ("unknown", "n/a", ""):
         return False
+    hit = _PREFIX.sub("", str(hit))
     h, e = _tokens(hit), _tokens(expected)
     if not h or not e:
         return False
     if len(e) == 1:                         # genus-level candidate -> genus match allowed
         return h[0] == e[0]
-    # species-level candidate -> require genus AND species epithet agreement
-    return len(h) >= 2 and h[0] == e[0] and h[1] == e[1]
+    # species-level candidate -> require genus AND species epithet agreement (any synonym of the target)
+    if len(h) < 2:
+        return False
+    if h[0] == e[0] and h[1] == e[1]:
+        return True
+    return (h[0], h[1]) in _SYNONYMS.get((e[0], e[1]), ())
 
 def is_uncultured(org: str) -> bool:
     if not org:
@@ -114,7 +174,7 @@ def make_complex_matcher(members):
     """A predicate hit_organism -> bool: does the hit match ANY member of the complex? (genus+epithet,
     or genus-only for a genus-level member)."""
     def mf(hit):
-        if not hit or hit.lower() in ("unknown", "n/a", ""):
+        if not isinstance(hit, str) or hit.lower() in ("unknown", "n/a", ""):
             return False
         h = _tokens(hit)
         if not h:
@@ -202,6 +262,170 @@ def classify(r1, r2, threshold=80.0, min_match_reads=3):
         return "FALSE_POSITIVE", avg_pct, avg_unc, ranks
     return "UNCERTAIN", avg_pct, avg_unc, ranks
 
+# ---- read-level validation (v3: within-margin near-tie, uncultured ignored) -----------------------
+# Per read: ignore uncultured/environmental hits; among the NAMED hits, the read is CONFIRMED when the
+# target is a named hit within `margin` of the TOP named bitscore AND its %id >= id_min; MISASSIGNED
+# when a named non-target beats the target by more than the margin (or the target is absent / low-id);
+# EXCLUDED when there is no named hit at all. Per (sample, taxid): validated_fraction =
+# CONFIRMED / (CONFIRMED + MISASSIGNED + EXCLUDED). Reads with NO blast hit
+# never appear in the TSV, so they are not counted (treated as uninformative / QC-dropped for now).
+def classify_one_read(hits: pd.DataFrame, expected: str, margin: float = 0.02, id_min: float = 80.0) -> str:
+    named = hits[(~hits["hit_organism"].map(is_uncultured)) & hits["bitscore"].notna()]
+    if named.empty:
+        return "EXCLUDED"
+    top = named["bitscore"].max()
+    tgt = named[named["hit_organism"].map(lambda o: organism_matches(o, expected))]
+    if tgt.empty:
+        return "MISASSIGNED"                               # named hits present, but target not among them
+    row = tgt.loc[tgt["bitscore"].idxmax()]
+    within = row["bitscore"] >= (1.0 - margin) * top       # target within `margin` of top named bitscore
+    id_ok = pd.notna(row["pident"]) and row["pident"] >= id_min
+    return "CONFIRMED" if (within and id_ok) else "MISASSIGNED"
+
+def validate_detection(sub: pd.DataFrame, expected: str, margin: float = 0.02, id_min: float = 80.0) -> dict:
+    """All BLAST rows for one (sample, taxid) (both read mates) -> read-level tally. Reads grouped by
+    qseqid. No minimum-read call here (that is applied downstream)."""
+    if sub is None or sub.empty:
+        return {"rl_confirmed": 0, "rl_misassigned": 0, "rl_excluded": 0, "rl_reads_hit": 0,
+                "validated_fraction": None}
+    labels = sub.groupby("qseqid", sort=False)[["hit_organism", "bitscore", "pident"]].apply(
+        lambda h: classify_one_read(h, expected, margin, id_min))
+    c = Counter(labels)
+    nc, nm, ne = c.get("CONFIRMED", 0), c.get("MISASSIGNED", 0), c.get("EXCLUDED", 0)
+    denom = nc + nm + ne
+    return {"rl_confirmed": nc, "rl_misassigned": nm, "rl_excluded": ne, "rl_reads_hit": denom,
+            "validated_fraction": round(nc / denom, 4) if denom else None}
+
+# ---- v4: taxid-based per-read validation -------------------------------------------------------------
+_PLASMID = re.compile(r"plasmid", re.I)
+
+
+def per_read_frame_tax(sub: pd.DataFrame, target_taxid, tax, expected: str = None,
+                       ignore_noncellular: bool = False, ignore_plasmid: bool = False,
+                       top_window: float = 0.02) -> pd.DataFrame:
+    """One row per read (qseqid) with the margin-independent pieces, matching by NCBI taxid:
+       has_named   any non-uncultured hit with a bitscore
+       has_target  a hit whose taxid descends from target_key(target_taxid)
+       ratio       best target bitscore / top named bitscore
+       tpid        %id of that best target hit
+       tlen        aligned length (bp) of that best target hit (decision #16)
+       tfrac       target hits / all kept named hits for the read (up to 100 hits; information only)
+       tfrac_top   target hits / kept named hits scoring within top_window (2%) of the top named bitscore
+                   (decision #20: the target-share rule)
+   ignore_noncellular (decision #17): vectors, unidentified plasmids, phages and "bacterium" hits are dropped
+                      like uncultured ones.
+   ignore_plasmid (decision #19): any hit whose title says "plasmid" is dropped, whatever its taxid (NCBI files
+                      plasmid sequences under the host species, and plasmids move between species).
+                      pratio = best plasmid bitscore / top bitscore over hits kept BEFORE the plasmid drop; a read
+                      whose plasmid hit scores within the margin of that top is on a mobile element and becomes
+                      EXCLUDED_PLASMID unless it is CONFIRMED on non-plasmid hits (counts neither for nor against).
+       top_sibling every top-bitscore named hit is a NON-target species in the target's NCBI complex"""
+    from taxonomy import parse_staxids
+    reads = pd.Index(sub["qseqid"].unique(), name="qseqid")
+    R = pd.DataFrame(index=reads)
+    R["has_named"] = False; R["has_target"] = False; R["ratio"] = float("nan")
+    R["tpid"] = float("nan"); R["tlen"] = float("nan"); R["tfrac"] = float("nan"); R["top_sibling"] = False
+    R["pratio"] = float("nan"); R["tfrac_top"] = float("nan")
+    if sub.empty:
+        return R
+    tkey = tax.target_key(target_taxid)
+    tcx = tax.complex_of(tkey) if tkey is not None else None
+    # classify each unique staxids string once: uncultured? target? sibling-in-complex?
+    cache = {}
+    def info(v):
+        if v not in cache:
+            ids = [t for t in (tax.resolve(x) for x in parse_staxids(v)) if t is not None]
+            if not ids:
+                cache[v] = None                                    # no usable taxid -> fall back to name
+            else:
+                unc = all(tax.is_uncultured(t) or (ignore_noncellular and tax.is_noncellular(t)) for t in ids)
+                tgt = tkey is not None and any(tkey in tax.lineage(t) for t in ids)
+                sib = (not tgt and tcx is not None and
+                       all(tax.complex_of(t) == tcx and tax.species_of(t) is not None for t in ids))
+                cache[v] = (unc, tgt, sib)
+        return cache[v]
+    inf = sub["staxids"].map(info)
+    tname = expected or (tax.name.get(tkey, "") if tkey is not None else "")
+    no_tax = inf.isna()
+    unc = inf.map(lambda x: x[0] if x else False)
+    tgt = inf.map(lambda x: x[1] if x else False)
+    sib = inf.map(lambda x: x[2] if x else False)
+    if no_tax.any():                                               # rare: hit without a taxid -> names
+        unc = unc.where(~no_tax, sub["hit_organism"].map(is_uncultured))
+        tgt = tgt.where(~no_tax, sub["hit_organism"].map(lambda o: organism_matches(o, tname)))
+    unc = unc.astype(bool)
+    if ignore_plasmid:
+        pl = sub["stitle"].fillna("").str.contains(_PLASMID)
+        pre = sub[(~unc) & sub["bitscore"].notna()]
+        if not pre.empty:
+            ptop = pre.groupby("qseqid")["bitscore"].max()
+            pbest = pre[pl.loc[pre.index]].groupby("qseqid")["bitscore"].max()
+            R["pratio"] = (pbest / ptop).reindex(R.index)
+        unc = unc | pl
+    s = sub.assign(_unc=unc, _tgt=tgt.astype(bool), _sib=sib.astype(bool))
+    named = s[(~s["_unc"]) & s["bitscore"].notna()]
+    if named.empty:
+        return R
+    top = named.groupby("qseqid")["bitscore"].max()
+    R["has_named"] = R.index.isin(top.index)
+    t = named[named["_tgt"]].sort_values("bitscore", ascending=False).groupby("qseqid").first()
+    R["has_target"] = R.index.isin(t.index)
+    R["ratio"] = (t["bitscore"] / top).reindex(R.index)
+    R["tpid"] = t["pident"].reindex(R.index)
+    R["tlen"] = pd.to_numeric(t["length"], errors="coerce").reindex(R.index) if "length" in t else float("nan")
+    R["tfrac"] = named.groupby("qseqid")["_tgt"].mean().reindex(R.index)
+    near = named[named["bitscore"] >= (1.0 - top_window) * named["qseqid"].map(top)]
+    R["tfrac_top"] = near.groupby("qseqid")["_tgt"].mean().reindex(R.index)
+    at_top = named[named["bitscore"] == named["qseqid"].map(top)]
+    R["top_sibling"] = at_top.groupby("qseqid")["_sib"].all().reindex(R.index, fill_value=False).astype(bool)
+    return R
+
+
+def label_reads(R: pd.DataFrame, margin: float, id_min: float, min_len: float = 0,
+                min_target_frac: float = 0) -> pd.Series:
+    """Per-read label at one margin from per_read_frame_tax output.
+    min_len (decision #16, not adopted; CLI default 0 = off): a read that would be CONFIRMED but whose target alignment is shorter
+    than min_len bp is EXCLUDED_SHORT (too little aligned to be species evidence; not evidence against either).
+    min_target_frac (decision #20, target-share rule): a read that would be CONFIRMED but whose target makes up
+    less than this share of the kept named hits scoring within 2% of the top (tfrac_top) is EXCLUDED_NONSPECIFIC.
+    Lower-scoring hits never count, so a target alone at the top (share 100%) is never removed."""
+    import numpy as np
+    ratio = R["ratio"].fillna(-1.0).to_numpy(dtype=float)
+    tpid = R["tpid"].fillna(-1.0).to_numpy(dtype=float)
+    tlen = (R["tlen"] if "tlen" in R else pd.Series(np.inf, index=R.index)).fillna(-1.0).to_numpy(dtype=float)
+    tfrac = (R["tfrac_top"] if "tfrac_top" in R else pd.Series(1.0, index=R.index)).fillna(0.0).to_numpy(dtype=float)
+    hit = R["has_target"].to_numpy(bool) & (ratio >= 1.0 - margin) & (tpid >= id_min)
+    long_ok = (tlen >= min_len) if min_len and min_len > 0 else np.ones(len(R), bool)
+    spec_ok = (tfrac >= min_target_frac) if min_target_frac and min_target_frac > 0 else np.ones(len(R), bool)
+    pratio = (R["pratio"] if "pratio" in R else pd.Series(np.nan, index=R.index)).fillna(-1.0).to_numpy(dtype=float)
+    plas = pratio >= 1.0 - margin
+    named_ = R["has_named"].to_numpy(bool)
+    lab = np.where(~named_ & plas, "EXCLUDED_PLASMID",
+          np.where(~named_, "EXCLUDED",
+          np.where(hit & long_ok & spec_ok, "CONFIRMED",
+          np.where(hit & ~long_ok, "EXCLUDED_SHORT",
+          np.where(hit, "EXCLUDED_NONSPECIFIC",
+          np.where(plas, "EXCLUDED_PLASMID",
+          np.where(R["top_sibling"].to_numpy(bool), "EXCLUDED_COMPLEX", "MISASSIGNED")))))))
+    return pd.Series(lab, index=R.index)
+
+
+def summarize_labels(lab: pd.Series) -> dict:
+    """Per-detection counts. No 'supported' call here: any minimum number of CONFIRMED reads is applied
+    downstream, outside this workflow."""
+    c = Counter(lab)
+    nc, nm = c.get("CONFIRMED", 0), c.get("MISASSIGNED", 0)
+    ne, nx = c.get("EXCLUDED", 0), c.get("EXCLUDED_COMPLEX", 0)
+    ns, nn = c.get("EXCLUDED_SHORT", 0), c.get("EXCLUDED_NONSPECIFIC", 0)
+    npl = c.get("EXCLUDED_PLASMID", 0)
+    denom = nc + nm + ne + nx + ns + nn + npl
+    return {"rl_confirmed": nc, "rl_misassigned": nm, "rl_excluded": ne, "rl_excluded_complex": nx,
+            "rl_excluded_short": ns, "rl_excluded_nonspecific": nn,
+            "rl_excluded_plasmid": npl, "rl_reads_hit": denom,
+            "validated_fraction": round(nc / denom, 4) if denom else None,
+            "validated_fraction_informative": round(nc / (nc + nm), 4) if (nc + nm) else None}
+
+
 def load_sample(path: str):
     """Load one sample's per-sample BLAST TSV. Returns None if the file is missing (-> BLAST_NOT_RUN),
     or a DataFrame (possibly empty) with parsed taxid/read tags + hit_organism."""
@@ -211,9 +435,15 @@ def load_sample(path: str):
     if os.path.getsize(path) == 0:
         return empty
     try:
-        df = pd.read_csv(path, sep="\t", header=None, names=COLS, dtype=str, on_bad_lines="skip")
+        df = pd.read_csv(path, sep="\t", header=None, dtype=str, on_bad_lines="skip", quoting=3)
     except Exception:
         return empty
+    if df.shape[1] == len(COLS_V4):
+        df.columns = COLS_V4
+    elif df.shape[1] == len(COLS):
+        df.columns = COLS
+    else:
+        raise ValueError(f"{path}: {df.shape[1]} columns; expected {len(COLS)} (v3) or {len(COLS_V4)} (v4)")
     if df.empty:
         return empty
     tags = df["qseqid"].str.split("|", n=2, expand=True)
@@ -221,9 +451,11 @@ def load_sample(path: str):
     df["read"] = tags[1] if tags.shape[1] > 1 else None
     df["pident"] = pd.to_numeric(df["pident"], errors="coerce")
     df["bitscore"] = pd.to_numeric(df["bitscore"], errors="coerce")
-    df["hit_organism"] = df.apply(
-        lambda r: r["sscinames"] if pd.notna(r["sscinames"]) and str(r["sscinames"]).strip() not in ("N/A", "")
-        else organism_from_stitle(r["stitle"]), axis=1)
+    # name per hit: NCBI sscinames when present, else parsed from the title (cached per unique title)
+    sci = df["sscinames"].fillna("").str.strip()
+    ok = ~sci.isin(["", "N/A"])
+    from_title = {t: organism_from_stitle(t) for t in df.loc[~ok, "stitle"].dropna().unique()}
+    df["hit_organism"] = sci.where(ok, df["stitle"].map(from_title).fillna("Unknown"))
     return df
 
 def main():
@@ -240,6 +472,27 @@ def main():
                     help="count a read as a match if the target is among its tied-best (max-bitscore) hits")
     ap.add_argument("--uncultured_uninformative", action="store_true",
                     help="drop reads whose best hit is uncultured/environmental (and not a match) from the denominator")
+    ap.add_argument("--near_tie_margin", type=float, default=0.02,
+                    help="read-level: target counts if its bitscore >= (1-margin) * top NAMED bitscore (default 0.02 = 2%%)")
+    ap.add_argument("--id_min", type=float, default=90.0, help="read-level: min %%id for the target hit (default 90)")
+    ap.add_argument("--synonyms", default=None,
+                    help="v4: resources/taxon_synonyms.csv; name matching accepts any synonym of the target")
+    ap.add_argument("--taxonomy", default=None,
+                    help="v4: taxonomy table (tools/build_taxonomy_table.py); with staxids in the BLAST TSVs, "
+                         "read-level validation matches by NCBI taxid + flags same-complex siblings")
+    ap.add_argument("--clade_counts", default=None,
+                    help="optional TSV (sample, taxid, reads_clade, total_reads) -> adds corrected/relative abundance")
+    ap.add_argument("--min_aln_len", type=float, default=0,
+                    help="v4 decision #16 (not adopted, default 0 = off): target alignment must be >= this many bp to "
+                         "CONFIRM (else EXCLUDED_SHORT)")
+    ap.add_argument("--ignore_noncellular", action=argparse.BooleanOptionalAction, default=True,
+                    help="v4 decision #17 (default on): ignore vector / plasmid / phage / 'bacterium' hits like uncultured ones")
+    ap.add_argument("--ignore_plasmid", action=argparse.BooleanOptionalAction, default=True,
+                    help="v4 decision #19 (default on): hits titled 'plasmid' do not score; plasmid-borne reads are EXCLUDED_PLASMID")
+    ap.add_argument("--min_target_frac", type=float, default=0.15,
+                    help="v4 decision #20, target-share rule (default 0.15; 0 turns it off): target hits must be >= this share of the "
+                         "read's kept named hits within the near-tie margin of the top (uncultured, non-organism and plasmid "
+                         "hits dropped first), else EXCLUDED_NONSPECIFIC")
     a = ap.parse_args()
 
     taxid_to_name = {}
@@ -247,6 +500,21 @@ def main():
         tn = pd.read_csv(a.taxid_names)
         taxid_to_name = dict(zip(tn["taxid"].astype(str), tn["organism_name"]))
     member_to_complex, complex_members = load_complex_crosswalk(a.complex_crosswalk)
+    if a.synonyms:
+        print(f"synonyms: {load_synonyms(a.synonyms)} target names from {a.synonyms}", flush=True)
+    tax = None
+    if a.taxonomy:
+        from taxonomy import Taxonomy
+        tax = Taxonomy(a.taxonomy)
+        print(f"taxonomy: {len(tax.parent):,} nodes from {a.taxonomy}", flush=True)
+    clade_counts = {}
+    if a.clade_counts and os.path.exists(a.clade_counts):
+        cc = pd.read_csv(a.clade_counts, sep="\t")
+        cc.columns = [c.strip().lower() for c in cc.columns]
+        for _, r in cc.iterrows():
+            clade_counts[(str(r["sample"]), str(r["taxid"]))] = (
+                pd.to_numeric(r.get("reads_clade"), errors="coerce"),
+                pd.to_numeric(r.get("total_reads"), errors="coerce"))
     pairs = pd.read_csv(a.taxid_list, sep="\t", header=None, names=["sample", "taxid"], dtype=str).dropna()
     pairs["taxid"] = pairs["taxid"].astype(str)
 
@@ -260,8 +528,19 @@ def main():
                 label, avg_pct, avg_unc = "BLAST_NOT_RUN", None, None
                 r1 = r2 = {}
                 cx_label, cx_pct = ("BLAST_NOT_RUN" if cx else ""), None
+                rl = validate_detection(None, expected)
             else:
                 sub = df[df["taxid"] == taxid]
+                if tax is not None and "staxids" in sub.columns:
+                    rl = summarize_labels(label_reads(per_read_frame_tax(sub, taxid, tax, expected,
+                                                                         a.ignore_noncellular, a.ignore_plasmid,
+                                                                         a.near_tie_margin),
+                                                      a.near_tie_margin, a.id_min, a.min_aln_len,
+                                                      a.min_target_frac))
+                else:
+                    if tax is not None:
+                        raise SystemExit(f"--taxonomy given but {sample} BLAST TSV has no staxids column")
+                    rl = validate_detection(sub, expected, a.near_tie_margin, a.id_min)
                 sub_r1, sub_r2 = sub[sub["read"] == "R1"], sub[sub["read"] == "R2"]
                 opts = dict(tie_aware=a.tie_aware, uncultured_uninformative=a.uncultured_uninformative)
                 r1 = analyze_reads(sub_r1, expected, **opts)
@@ -274,8 +553,28 @@ def main():
                     cx_label, cx_pct, _, _ = classify(c1, c2, a.threshold, a.min_match_reads)
                 else:
                     cx_label, cx_pct = "", None
+            cc = clade_counts.get((sample, taxid))
+            frac = rl["validated_fraction"]
+            reads_clade = corrected = relative = None
+            if cc is not None:
+                reads_clade, total_reads = cc
+                if frac is not None and pd.notna(reads_clade):
+                    corrected = round(float(frac) * float(reads_clade), 1)
+                    relative = (round(corrected / float(total_reads), 8)
+                                if (pd.notna(total_reads) and total_reads) else None)
             rows.append({"sample": sample, "taxid": taxid, "expected_organism": expected,
                          "classification": label, "avg_pct_match": avg_pct, "avg_pct_uncultured": avg_unc,
+                         "rl_confirmed": rl["rl_confirmed"], "rl_misassigned": rl["rl_misassigned"],
+                         "rl_excluded": rl["rl_excluded"],
+                         "rl_excluded_complex": rl.get("rl_excluded_complex"),
+                         "rl_excluded_short": rl.get("rl_excluded_short"),
+                         "rl_excluded_plasmid": rl.get("rl_excluded_plasmid"),
+                         "rl_excluded_nonspecific": rl.get("rl_excluded_nonspecific"),
+                         "rl_reads_hit": rl["rl_reads_hit"],
+                         "validated_fraction": rl["validated_fraction"],
+                         "validated_fraction_informative": rl.get("validated_fraction_informative"),
+                         "reads_clade": reads_clade, "corrected_abundance": corrected,
+                         "relative_abundance": relative,
                          "R1_n_reads": r1.get("n_reads"), "R1_n_match": r1.get("n_match"),
                          "R1_pct_match": r1.get("pct_match"), "R1_expected_rank": r1.get("expected_rank"),
                          "R1_top_organisms": r1.get("top_organisms"),
@@ -285,9 +584,20 @@ def main():
                          "complex_name": cx or "", "complex_classification": cx_label,
                          "avg_complex_pct_match": cx_pct})
     out = pd.DataFrame(rows)
-    print("CLASSIFICATION SUMMARY (species level)")
+    print("CLASSIFICATION SUMMARY (species level, legacy)")
     for lab, c in out["classification"].value_counts().items():
         print(f"  {lab:<22} {c:>5} ({c/len(out)*100:.1f}%)")
+    print("\nREAD-LEVEL VALIDATION SUMMARY (within-%.0f%% near-tie, uncultured ignored)" % (a.near_tie_margin * 100))
+    vf = out["validated_fraction"].dropna()
+    print(f"  detections with reads: {len(vf):>5}   with >= 1 CONFIRMED: {int((out['rl_confirmed'] >= 1).sum())}")
+    if len(vf):
+        print(f"  validated_fraction:  mean {vf.mean():.3f}  median {vf.median():.3f}")
+    print(f"  reads:  CONFIRMED {int(out['rl_confirmed'].sum())}   "
+          f"MISASSIGNED {int(out['rl_misassigned'].sum())}   EXCLUDED {int(out['rl_excluded'].sum())}   "
+          f"EXCLUDED_PLASMID {int(out['rl_excluded_plasmid'].fillna(0).sum())}")
+    if clade_counts:
+        ra = out["relative_abundance"].dropna()
+        print(f"  abundance computed for {len(ra)} detections (clade_counts provided)")
     if member_to_complex:
         cxrows = out[out["complex_name"] != ""]
         print(f"\nCOMPLEX-LEVEL SUMMARY ({len(cxrows)} candidates in a complex)")

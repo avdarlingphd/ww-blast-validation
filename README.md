@@ -20,6 +20,11 @@ to that taxid, BLASTs them against a nucleotide database (NCBI `nt`), and labels
 This removes taxonomic-classifier (Kraken2, or later Bowtie2) false positives from your detection
 tables before downstream analysis.
 
+> **Current method (v4):** read-level validation matched by NCBI taxid, with a synonym table and a
+> same-complex sibling label. See [`docs/DECISION_POINTS.md`](docs/DECISION_POINTS.md) (every choice and why),
+> [`docs/FINAL_SPEC_v4.md`](docs/FINAL_SPEC_v4.md), the figure `docs/master_methods_figure.png`, and the
+> CHANGELOG. The per-detection classification below is still produced alongside it.
+
 ## Pipeline
 
 ```
@@ -161,7 +166,7 @@ large data and outputs live on **holylabs** (persistent) and are gitignored.
 |------|-------|
 | Classifier inputs (`.kraken` / `.kreport`) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/kraken_out/kraken_output_ct0_5_min_hit_3/` |
 | QC'd paired FASTQs | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs/` |
-| **Outputs** (FASTAs, BLAST tables, report) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v2/` — a **writable sibling** of the read-only `ynhh_ww_rpip_2024/` project dir (keeps raw inputs locked) |
+| **Outputs** (FASTAs, BLAST tables, report) | `/n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v4/` — a **writable sibling** of the read-only `ynhh_ww_rpip_2024/` project dir (keeps raw inputs locked). v2 results archived to netscratch 2026-11-11 |
 | BLAST `nt` database | **configurable** (`db:`) — point at your local nt; prefer a dated build over `latest`. The build actually used is recorded per run in `PROVENANCE.txt`. |
 | Conda environment | `workflow/envs/environment.yaml` |
 | Candidate list + names | `resources/` (in git) |

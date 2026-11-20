@@ -16,7 +16,7 @@ fastq_dir:   /n/holylabs/hhealy_lab/Lab/ynhh_ww_rpip_2024/Ginkgo_rpip_fastqs
 # ---- outputs (writable sibling of the read-only project dir; keeps raw inputs locked) ----
 # report lands at results_dir/<detection_source>/blast_false_positive_report.tsv
 # Under results_dir/<source>/:  fasta/ (extracted), blast/ (blastn results), flags/, report, PROVENANCE.txt.
-results_dir: /n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v2
+results_dir: /n/holylabs/hhealy_lab/Lab/ynhh_ww_blast_validation_v4   # v4 (2026-11-11); v2 archived to /n/netscratch/hhealy_lab/avdarling/ynhh_ww_blast_validation_v2_archive
 
 # ---- binaries + database ----
 # python/blastn/seqtk all come from the single ww-blast-validation env (built from

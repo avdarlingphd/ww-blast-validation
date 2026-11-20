@@ -14,7 +14,12 @@ set -euo pipefail
 SAMPLE="$1"; FASTA_TREE="$2"; OUT="$3"
 : "${BLASTN:?}"; : "${SEQTK:?}"; : "${DB:?}"
 MAX_READS="${MAX_READS:-500}"; MAX_TARGET="${MAX_TARGET:-100}"; THREADS="${THREADS:-8}"
-OUTFMT="6 qseqid sscinames pident length evalue bitscore stitle"
+# v4: staxids added (column 3) so hits are matched to the target by NCBI taxid, not by name.
+OUTFMT="6 qseqid sscinames staxids pident length evalue bitscore stitle"
+# BLAST resolves sscinames from taxdb.btd/.bti found via $BLASTDB. They sit next to nt; without this the
+# v2/v3 runs returned sscinames = N/A for every hit (names then came from free-text titles).
+export BLASTDB="$(dirname "$DB")${BLASTDB:+:$BLASTDB}"
+[ -s "$(dirname "$DB")/taxdb.btd" ] || { echo "ERROR: taxdb.btd not found next to $DB" >&2; exit 1; }
 od="$(dirname "$OUT")"; mkdir -p "$od"
 
 tmpq="$(mktemp "${od}/.${SAMPLE}_query.XXXXXX.fasta")"
