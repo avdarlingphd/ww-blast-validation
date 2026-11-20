@@ -65,8 +65,8 @@ ax.text(12.35,15.5,"best hit =\nhighest\nbitscore",ha="left",va="center",fontsiz
 ax.text(10.6,14.55,"Target = any hit whose taxid rolls up to the target species (renames such as\nRaoultella → Klebsiella cannot break it); a hit with no taxid is matched by the synonym table.\nIgnored: uncultured, vector / phage / 'bacterium' and plasmid hits",
         ha="center",va="center",fontsize=8.0,color="#333")
 ax.text(10.6,14.02,"Near-tie:  within 2% of the top named score,  %id ≥ 90",ha="center",fontsize=8.3,fontweight="bold",color=GRN)
-rb(7.3,13.78,2.75,0.4,CHO); ax.text(8.68,13.58,"V. cholerae (141)  target",ha="center",va="center",fontsize=8.0)
-ax.text(10.35,13.58,"within 2% of",ha="center",va="center",fontsize=8.3,fontweight="bold",color="#333")
+rb(7.1,13.78,2.45,0.4,CHO); ax.text(8.33,13.58,"V. cholerae (141)  target",ha="center",va="center",fontsize=8.0)
+ax.text(10.45,13.58,"within 2% of",ha="center",va="center",fontsize=8.3,fontweight="bold",color="#333")
 rb(11.3,13.78,2.75,0.4,"#FBF0D8"); ax.text(12.68,13.58,"V. mimicus (143)  top named",ha="center",va="center",fontsize=8.0)
 
 arrow(7.0,15.3,6.8,15.3,lw=1.9)   # A -> B
@@ -81,7 +81,7 @@ d1,d2,d3=11.4,9.7,7.85; hb=1.0; h2=1.5; h3=1.3; mis=6.3
 ax.text(3.4,12.32,"each read Kraken assigned to the target taxon",ha="center",fontsize=8.8,style="italic",color="#555")
 arrow(3.4,12.1,3.4,d1+hb/2,head=True)
 dec(d1,hb,"Any NAMED organism hit left after dropping uncultured,\nvector / phage / 'bacterium' and plasmid hits?",fs=10.0)
-dec(d2,h2,"Is a TARGET-species hit (by taxid) within the margin\nof the top NAMED bitscore?  (ignored hits left out)\nAND  %id ≥ 90%   AND  target ≥ 15% of the\nkept named hits within 2% of the top",fs=10.4)
+dec(d2,h2,"Is a TARGET-species hit (by taxid) within 2%\nof the top NAMED bitscore?  (ignored hits left out)\nAND  %id ≥ 90%   AND  target ≥ 15% of the\nkept named hits within 2% of the top",fs=10.4)
 dec(d3,h3,"Are ALL top-scoring named hits sibling species\nin the target's NCBI complex?  (e.g. K. pneumoniae complex)",fs=10.0)
 leaf(d1,"EXCLUDED","no named organism hit left\n(no nt match, or only ignored hits)")
 leaf(d2,"CONFIRMED","counts toward the taxon")
@@ -111,7 +111,7 @@ for yy,txt in [
 # ===================== worked examples =====================
 # ---- Example 1: one read ----
 ax.add_patch(FancyBboxPatch((0.4,0.25),6.55,3.4,boxstyle="round,pad=0.03,rounding_size=0.08",lw=1.2,edgecolor=GRN,facecolor="#F6FBF7"))
-ax.text(0.62,3.42,"Example 1:   one read   >666|R1|r2",fontsize=10.6,fontweight="bold")
+ax.text(0.62,3.42,"Example 1:   one read   >666|R2|r7",fontsize=10.6,fontweight="bold")
 e1hx=[0.55,2.85,3.65,4.35,5.20]; e1hw=[2.30,0.80,0.70,0.85,1.40]
 for j,h in enumerate(["BLAST hit organism","taxid","% id","bitscore","used?"]):
     ax.add_patch(Rectangle((e1hx[j],2.56),e1hw[j],0.36,facecolor="#E8E8E8",edgecolor="#999",lw=0.8)); ax.text(e1hx[j]+e1hw[j]/2,2.74,h,ha="center",va="center",fontsize=7.8,fontweight="bold")
@@ -128,13 +128,13 @@ for i,(org,tid,pid,bit,note,bg) in enumerate(e1rows):
     ax.text(e1hx[3]+e1hw[3]/2,cyc,bit,ha="center",va="center",fontsize=7.8)
     ax.text(e1hx[4]+e1hw[4]/2,cyc,note,ha="center",va="center",fontsize=7.3,style="italic",color="#555")
 ax.text(0.62,1.04,"Ignore uncultured.  Top NAMED hit = V. mimicus (143).",fontsize=7.9,color="#222")
-ax.text(0.62,0.76,"Target (taxid 666) scores 141: within 2% of 143,  %id ≥ 90,  1 of 2 top hits.",fontsize=7.9,color="#222")
+ax.text(0.62,0.76,"Target (666) scores 141: within 2% of 143, %id ≥ 90, 1 of 2 top hits (50% ≥ 15%).",fontsize=7.9,color="#222")
 ax.text(0.62,0.44,"→  CONFIRMED   (counts toward V. cholerae)",fontsize=8.7,fontweight="bold",color=GRN)
-# ---- Example 2: is the (sample, taxon) supported? ----
+# ---- Example 2: one detection, validated fraction and corrected abundance ----
 ax.add_patch(FancyBboxPatch((7.15,0.25),6.95,3.4,boxstyle="round,pad=0.03,rounding_size=0.08",lw=1.2,edgecolor="#5b4a7a",facecolor="#F6F4FB"))
 ax.text(7.4,3.42,"Example 2:   one detection (sample S12, V. cholerae)",fontsize=10.2,fontweight="bold")
 for yy,txt in [
- (2.92,"reads in subsample:    CONFIRMED 418   |   MISASSIGNED 60   |   EXCLUDED 22"),
+ (2.92,"reads:  CONFIRMED 418  |  MISASSIGNED 60  |  any EXCLUDED label 22"),
  (2.54,"validated fraction  =  418 / (418 + 60 + 22)  =  83.6%"),
  (2.16,"reads_clade (Kraken)  =  4,200"),
  (1.78,"corrected abundance  =  0.836 × 4,200  =  3,511 reads"),
