@@ -30,8 +30,7 @@ v3 read-level validation (ADDITIVE, non-destructive): alongside the legacy per-d
   each read is scored CONFIRMED / MISASSIGNED / EXCLUDED (classify_one_read): uncultured/environmental
   hits are ignored, and the target CONFIRMS a read if it is a NAMED hit within --near_tie_margin (default
   2%) of the top named bitscore with %id >= --id_min. Per (sample, taxid) the report gains rl_confirmed,
-  rl_misassigned, rl_excluded, validated_fraction = CONFIRMED/(CONFIRMED+MISASSIGNED+EXCLUDED), and
-  supported (CONFIRMED > 2). With --clade_counts (sample,taxid,reads_clade,total_reads) it also adds
+  rl_misassigned, rl_excluded and validated_fraction = CONFIRMED/(CONFIRMED+MISASSIGNED+EXCLUDED). With --clade_counts (sample,taxid,reads_clade,total_reads) it also adds
   corrected_abundance = validated_fraction * reads_clade and relative_abundance = corrected / total_reads.
 
 v4 TAXID MODE (--taxonomy TABLE; needs staxids in the BLAST outfmt): hits are matched to the Kraken target
@@ -268,7 +267,7 @@ def classify(r1, r2, threshold=80.0, min_match_reads=3):
 # target is a named hit within `margin` of the TOP named bitscore AND its %id >= id_min; MISASSIGNED
 # when a named non-target beats the target by more than the margin (or the target is absent / low-id);
 # EXCLUDED when there is no named hit at all. Per (sample, taxid): validated_fraction =
-# CONFIRMED / (CONFIRMED + MISASSIGNED + EXCLUDED); supported if CONFIRMED > 2. Reads with NO blast hit
+# CONFIRMED / (CONFIRMED + MISASSIGNED + EXCLUDED). Reads with NO blast hit
 # never appear in the TSV, so they are not counted (treated as uninformative / QC-dropped for now).
 def classify_one_read(hits: pd.DataFrame, expected: str, margin: float = 0.02, id_min: float = 80.0) -> str:
     named = hits[(~hits["hit_organism"].map(is_uncultured)) & hits["bitscore"].notna()]
@@ -283,21 +282,19 @@ def classify_one_read(hits: pd.DataFrame, expected: str, margin: float = 0.02, i
     id_ok = pd.notna(row["pident"]) and row["pident"] >= id_min
     return "CONFIRMED" if (within and id_ok) else "MISASSIGNED"
 
-def validate_detection(sub: pd.DataFrame, expected: str, margin: float = 0.02, id_min: float = 80.0,
-                       min_confirmed: int = 3) -> dict:
+def validate_detection(sub: pd.DataFrame, expected: str, margin: float = 0.02, id_min: float = 80.0) -> dict:
     """All BLAST rows for one (sample, taxid) (both read mates) -> read-level tally. Reads grouped by
-    qseqid. supported when CONFIRMED >= min_confirmed (min_confirmed=3 => '> 2 confirmed reads')."""
+    qseqid. No minimum-read call here (that is applied downstream)."""
     if sub is None or sub.empty:
         return {"rl_confirmed": 0, "rl_misassigned": 0, "rl_excluded": 0, "rl_reads_hit": 0,
-                "validated_fraction": None, "supported": False}
+                "validated_fraction": None}
     labels = sub.groupby("qseqid", sort=False)[["hit_organism", "bitscore", "pident"]].apply(
         lambda h: classify_one_read(h, expected, margin, id_min))
     c = Counter(labels)
     nc, nm, ne = c.get("CONFIRMED", 0), c.get("MISASSIGNED", 0), c.get("EXCLUDED", 0)
     denom = nc + nm + ne
     return {"rl_confirmed": nc, "rl_misassigned": nm, "rl_excluded": ne, "rl_reads_hit": denom,
-            "validated_fraction": round(nc / denom, 4) if denom else None,
-            "supported": nc >= min_confirmed}
+            "validated_fraction": round(nc / denom, 4) if denom else None}
 
 # ---- v4: taxid-based per-read validation -------------------------------------------------------------
 _PLASMID = re.compile(r"plasmid", re.I)
@@ -414,8 +411,8 @@ def label_reads(R: pd.DataFrame, margin: float, id_min: float, min_len: float = 
 
 
 def summarize_labels(lab: pd.Series) -> dict:
-    """Per-detection counts. No 'supported' call here: a minimum number of CONFIRMED reads (default 3) is an
-    option applied downstream in the Time-Series R script, so it can be switched off there."""
+    """Per-detection counts. No 'supported' call here: any minimum number of CONFIRMED reads is applied
+    downstream, outside this workflow."""
     c = Counter(lab)
     nc, nm = c.get("CONFIRMED", 0), c.get("MISASSIGNED", 0)
     ne, nx = c.get("EXCLUDED", 0), c.get("EXCLUDED_COMPLEX", 0)
@@ -592,8 +589,7 @@ def main():
         print(f"  {lab:<22} {c:>5} ({c/len(out)*100:.1f}%)")
     print("\nREAD-LEVEL VALIDATION SUMMARY (within-%.0f%% near-tie, uncultured ignored)" % (a.near_tie_margin * 100))
     vf = out["validated_fraction"].dropna()
-    print(f"  detections with reads: {len(vf):>5}   with >= 1 CONFIRMED: {int((out['rl_confirmed'] >= 1).sum())}"
-          f"   with >= 3 (R-script option): {int((out['rl_confirmed'] >= 3).sum())}")
+    print(f"  detections with reads: {len(vf):>5}   with >= 1 CONFIRMED: {int((out['rl_confirmed'] >= 1).sum())}")
     if len(vf):
         print(f"  validated_fraction:  mean {vf.mean():.3f}  median {vf.median():.3f}")
     print(f"  reads:  CONFIRMED {int(out['rl_confirmed'].sum())}   "

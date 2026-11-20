@@ -25,7 +25,7 @@ got there.
 ## v3: read-level validation (additive)
 - Each read is CONFIRMED (target within a near-tie bitscore margin of the top named hit, %id >= 80;
   uncultured ignored), MISASSIGNED, or EXCLUDED (no named hit). Per detection: `validated_fraction`,
-  `supported` (CONFIRMED > 2), and with `--clade_counts` a corrected / relative abundance
+  (an early `supported` = CONFIRMED > 2 call was later removed; any minimum-read rule is applied downstream), and with `--clade_counts` a corrected / relative abundance
   (`tools/build_clade_counts.py`). `tools/near_tie_margin_sweep.py` runs several margins in one pass.
   The legacy per-detection classification is unchanged.
 

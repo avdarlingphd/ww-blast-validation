@@ -17,7 +17,7 @@ species had 0 TRUE_POSITIVE detections and are dropped from the Time-Series prim
 | Same-complex sibling wins | **EXCLUDED_COMPLEX** (not MISASSIGNED). Complex = NCBI "species group"/"species subgroup" (broadest below genus). Only when *every* top-bitscore named hit is a sibling. |
 | Near-tie margin | **Decide after the rerun**: sweep 2% / 5% / 10% on the corrected output; Hannah picks. |
 | Paper input | **Read-level supported detections + corrected relative abundance** replace the v2.1 TRUE_POSITIVE rule in Time_Series `config/ww_filter.yml`, after Amanda reviews old-vs-new differences. |
-| Kept as is | nt 2026_09; up to 500 reads per read set (seqtk seed 42, same reads as v2); max_target_seqs 100; %id >= 80; supported = CONFIRMED > 2; uncultured/environmental hits ignored. |
+| Kept as is | nt 2026_09; up to 500 reads per read set (seqtk seed 42, same reads as v2); max_target_seqs 100; %id >= 80 (raised to 90 in the final rules, DECISION_POINTS.md); no minimum-read call in this workflow (any minimum is applied downstream); uncultured/environmental hits ignored. |
 
 ## Synonym table (added 2026-11-09, Amanda: "we really need a synonym table")
 `resources/taxon_synonyms.csv` (built by `tools/build_synonym_table.py` from taxdmp_2026-09-01 + `resources/taxon_synonyms_manual.csv`):

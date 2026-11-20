@@ -7,8 +7,8 @@ it at every margin in a single pass. Vectorized (no per-read Python apply), so i
 re-running false_positive_detection.py once per margin.
 
 Output: one tidy row per (sample, taxid, margin) with confirmed / misassigned / excluded counts,
-validated_fraction = CONFIRMED / all reads with a hit. No 'supported' call (a minimum CONFIRMED count is an
-option in the Time-Series R script). Taxid mode can also sweep --min_aln_lens and --min_target_fracs.
+validated_fraction = CONFIRMED / all reads with a hit. No minimum-read call (applied downstream,
+outside this workflow). Taxid mode can also sweep --min_aln_lens and --min_target_fracs.
 Optionally joins a clade_counts TSV (sample, taxid, reads_clade, total_reads) to add corrected and
 relative abundance per margin. Reuses load_sample / is_uncultured / organism_matches from the pipeline.
 
@@ -164,7 +164,7 @@ def main():
 
     print("\nNEAR-TIE MARGIN SWEEP  (uncultured ignored, %%id >= %.0f)" % a.id_min)
     print(f"{'margin':>7} {'min_bp':>7} {'min_frac':>8} {'CONFIRMED':>11} {'MISASSIGNED':>12} {'EXCLUDED':>10} "
-          f"{'EXCL_CPLX':>10} {'EXCL_SHORT':>11} {'EXCL_NONSP':>11} {'EXCL_PLSMD':>11} {'mean_vf':>8} {'>=1 conf':>9} {'>=3 conf':>9}"
+          f"{'EXCL_CPLX':>10} {'EXCL_SHORT':>11} {'EXCL_NONSP':>11} {'EXCL_PLSMD':>11} {'mean_vf':>8} {'>=1 conf':>9}"
           f" {'detections':>11}")
     for (m, ml, mf), d in out.groupby(["margin", "min_aln_len", "min_target_frac"]):
         vf = d["validated_fraction"].dropna()
@@ -172,7 +172,7 @@ def main():
               f"{int(d['excluded'].sum()):>10,} {int(d['excluded_complex'].sum()):>10,} "
               f"{int(d['excluded_short'].sum()):>11,} {int(d['excluded_nonspecific'].sum()):>11,} "
               f"{int(d['excluded_plasmid'].sum()):>11,} {vf.mean():>8.3f} "
-              f"{int((d['confirmed'] >= 1).sum()):>9,} {int((d['confirmed'] >= 3).sum()):>9,} {len(d):>11,}")
+              f"{int((d['confirmed'] >= 1).sum()):>9,} {len(d):>11,}")
     print(f"\nreport -> {a.output}")
 
 
